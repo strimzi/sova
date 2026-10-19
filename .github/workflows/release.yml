@@ -60,3 +60,34 @@ jobs:
     with:
       artifactSuffix: "sova"
       releaseVersion: ${{ inputs.releaseVersion }}
+
+  snyk-scan:
+    name: Snyk Scan
+    needs:
+      - prepare-release-artifacts
+    if: ${{ startsWith(github.ref, 'refs/heads/release-') }}
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/snyk.yml
+    with:
+      releaseVersion: ${{ inputs.releaseVersion }}
+      sourceBuildRunId: ${{ inputs.sourceBuildRunId }}
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  fossa-scan:
+    name: FOSSA Scan
+    needs:
+      - prepare-release-artifacts
+    if: ${{ startsWith(github.ref, 'refs/heads/release-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/fossa.yml
+    with:
+      releaseVersion: ${{ inputs.releaseVersion }}
+      sourceBuildRunId: ${{ inputs.sourceBuildRunId }}
+    secrets:
+      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
