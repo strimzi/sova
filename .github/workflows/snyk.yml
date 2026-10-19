@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: 'latest'
-      sourceBuildRunId:
-        description: 'Build workflow run ID for artifact download'
-        required: true
-        type: string
     secrets:
       SNYK_TOKEN:
         required: true
