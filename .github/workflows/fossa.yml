@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: ''
-      sourceBuildRunId:
-        description: 'Build workflow run ID for artifact download'
-        required: true
-        type: string
     secrets:
       FOSSA_API_KEY:
         required: true
