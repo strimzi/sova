@@ -16,7 +16,7 @@ jobs:
   # Builds sova-<version>-dist.zip and uploads it as the release-sova-<version>.tar workflow
   # artifact. The GitHub release itself is created by hand from that artifact, as for the other
   # Strimzi projects.
-  release-artifacts:
+  prepare-release-artifacts:
     name: Build the Sova distribution
     if: ${{ startsWith(github.ref, 'refs/heads/release-') }}
     runs-on: ubuntu-latest
@@ -48,7 +48,8 @@ jobs:
   # `gh attestation verify sova-<version>-dist.zip --repo strimzi/sova`.
   attest:
     name: Attestation
-    needs: [release-artifacts]
+    needs:
+      - prepare-release-artifacts
     permissions:
       contents: read
       # OIDC token for Sigstore signing
