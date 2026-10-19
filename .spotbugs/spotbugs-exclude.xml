@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+  <Match>
+    <!-- MetricSnapshot's record accessors return its Map fields (brokerAddresses,
+         currentOffsets, consumerGroupLags, etc.) by reference, and
+         MetricsRegistry.prometheusRegistry() returns the owned PrometheusRegistry by reference so
+         HttpServers can mount the scrape handler on it — both deliberate, see the classes'
+         javadoc. -->
+    <Bug pattern="EI_EXPOSE_REP"/>
+  </Match>
+  <Match>
+    <!-- MetricSnapshot's canonical constructor stores its Map arguments by reference (the record
+         is documented as holding already-unmodifiable maps, so a defensive copy per collection
+         cycle would just be wasted allocation), and MetricsCollector stores the externally
+         supplied Admin client by reference — Admin is a client handle, not a value that can be
+         copied. -->
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+</FindBugsFilter>
