@@ -10,6 +10,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
@@ -17,10 +18,12 @@ import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import io.strimzi.sova.integration.KafkaTestResourceManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -34,6 +37,9 @@ class MainSmokeIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
     private static KafkaTestResourceManager kafkaManager;
+
+    @TempDir
+    Path tempDir;
 
     @BeforeAll
     static void startKafka() {
@@ -69,6 +75,52 @@ class MainSmokeIT {
     }
 
     @Test
+    void acceptsClientConfigurationAndLogsOnlyItsKeys() throws Exception {
+        int metricsPort = freePort();
+        int managementPort = freePort();
+        Path log = tempDir.resolve("sova.log");
+        // sasl.jaas.config stands in for a credential: Sova must log the key, never the value.
+        Process sova = startSova(KafkaTestResourceManager.getBootstrapServers(), metricsPort, managementPort,
+                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION",
+                        "client.id=sova-smoke-it\nsasl.jaas.config=top-secret-credentials\n"),
+                log);
+        try {
+            awaitStatus(managementPort, "/ready", 200);
+
+            assertTrue(get(metricsPort, "/metrics").body().contains("kafka_brokers 1.0"));
+            String output = Files.readString(log);
+            assertTrue(output.contains("client.id") && output.contains("sasl.jaas.config"),
+                    "the keys of the client configuration must be logged, was: " + output);
+            assertFalse(output.contains("top-secret-credentials"),
+                    "the values of the client configuration must never be logged, was: " + output);
+        } finally {
+            sova.destroy();
+            sova.waitFor();
+        }
+    }
+
+    @Test
+    void clientConfigurationReachesTheAdminClient() throws Exception {
+        int metricsPort = freePort();
+        int managementPort = freePort();
+        // The test broker speaks plaintext. If this setting reaches the Admin client it tries a TLS
+        // handshake against it and never collects; if it were ignored, Sova would turn Ready within
+        // seconds, as in the test above.
+        Process sova = startSova(KafkaTestResourceManager.getBootstrapServers(), metricsPort, managementPort,
+                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION", "security.protocol=SSL\n"), null);
+        try {
+            awaitStatus(managementPort, "/healthy", 200);
+            Thread.sleep(Duration.ofSeconds(5));
+
+            assertEquals(503, get(managementPort, "/ready").statusCode(),
+                    "security.protocol=SSL must have been applied to the Admin client");
+        } finally {
+            sova.destroy();
+            sova.waitFor();
+        }
+    }
+
+    @Test
     void isLiveButNotReadyWhenTheClusterIsUnreachable() throws Exception {
         int metricsPort = freePort();
         int managementPort = freePort();
@@ -89,17 +141,30 @@ class MainSmokeIT {
 
     private static Process startSova(String bootstrapServers, int metricsPort, int managementPort)
             throws IOException {
+        return startSova(bootstrapServers, metricsPort, managementPort, Map.of(), null);
+    }
+
+    /**
+     * Starts Sova in a child JVM.
+     *
+     * @param extraEnv additional environment variables for the child
+     * @param logFile  where to write the child's output, or {@code null} to inherit this process's
+     */
+    private static Process startSova(String bootstrapServers, int metricsPort, int managementPort,
+                                     Map<String, String> extraEnv, Path logFile) throws IOException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         ProcessBuilder pb = new ProcessBuilder(java, "-cp", System.getProperty("java.class.path"),
                 Main.class.getName());
         Map<String, String> env = pb.environment();
         env.put("SOVA_KAFKA_BOOTSTRAP_SERVERS", bootstrapServers);
-        env.put("SOVA_TLS_ENABLED", "false");
         env.put("SOVA_METRICS_PORT", String.valueOf(metricsPort));
         env.put("SOVA_MANAGEMENT_PORT", String.valueOf(managementPort));
         env.put("SOVA_COLLECT_INTERVAL_MS", "1000");
+        env.putAll(extraEnv);
         pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        pb.redirectOutput(logFile == null
+                ? ProcessBuilder.Redirect.INHERIT
+                : ProcessBuilder.Redirect.to(logFile.toFile()));
         return pb.start();
     }
 

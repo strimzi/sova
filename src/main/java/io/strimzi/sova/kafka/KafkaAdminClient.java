@@ -4,7 +4,6 @@
  */
 package io.strimzi.sova.kafka;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Properties;
 
@@ -15,15 +14,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.strimzi.sova.config.SovaConfig;
-import io.strimzi.sova.kafka.auth.SaslConfigBuilder;
-import io.strimzi.sova.kafka.auth.TlsConfigBuilder;
 
 /**
  * Factory that creates the {@link Admin} client used for all Kafka metadata queries.
  *
- * <p>TLS and SASL configuration is delegated to {@link TlsConfigBuilder} and
- * {@link SaslConfigBuilder} respectively. Both are applied only when the corresponding feature
- * is enabled / present in {@link SovaConfig}.
+ * <p>Security (TLS, SASL) and any other client setting come from the optional
+ * {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} environment variable (Kafka client properties,
+ * one {@code key=value} per line); its entries are passed to the client as they are.
  *
  * <p>Threading: the produced {@code Admin} instance is a thread-safe Kafka client.
  */
@@ -47,9 +44,8 @@ public class KafkaAdminClient {
      *
      * @param config application configuration
      * @return configured {@link Admin} client
-     * @throws IOException if TLS PEM files cannot be read
      */
-    public static Admin create(SovaConfig config) throws IOException {
+    public static Admin create(SovaConfig config) {
         Properties props = buildProperties(config);
         log.info("Creating Kafka AdminClient for bootstrap: {} (topic.regex={}, group.regex={}, collect.interval={}ms)",
             config.getKafkaBootstrapServers(), config.getTopicPattern(),
@@ -60,39 +56,20 @@ public class KafkaAdminClient {
     /**
      * Assembles the Kafka client properties from the given config.
      *
+     * <p>The configured client properties are applied first, so the Sova-specific settings below
+     * always win over them.
+     *
      * @param config application configuration
      * @return client properties
-     * @throws IOException if TLS PEM files cannot be read
      */
-    static Properties buildProperties(SovaConfig config) throws IOException {
+    static Properties buildProperties(SovaConfig config) {
         Properties props = new Properties();
+        props.putAll(config.getKafkaAdminClientConfiguration());
         props.setProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, config.getKafkaBootstrapServers());
         // Halve the 60 s client default. A cycle makes several sequential calls, so this bounds a
         // call, not a cycle — the cycle is covered by the staleness window in MetricsCollector —
         // but it stops one unresponsive coordinator from stretching every cycle past the interval.
         props.setProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(API_TIMEOUT.toMillis()));
-
-        if (config.isTlsEnabled()) {
-            log.info("TLS enabled, loading CA cert from {} (mTLS: {})", config.getTlsCaCertFile(),
-                config.getTlsCertFile().isPresent() ? "enabled" : "disabled");
-            TlsConfigBuilder.configure(props,
-                config.getTlsCaCertFile(),
-                config.getTlsCertFile(),
-                config.getTlsKeyFile());
-        } else {
-            log.info("TLS disabled");
-        }
-
-        config.getSaslMechanism()
-            .ifPresent(mechanism -> {
-                log.info("SASL enabled with mechanism: {}", mechanism);
-                SaslConfigBuilder.configure(props, mechanism,
-                    config.getSaslJaasConfig()
-                        .orElse(""),
-                    config.getSaslLoginCallbackHandlerClass()
-                        .orElse(""),
-                    config.isTlsEnabled());
-            });
 
         return props;
     }

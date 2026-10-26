@@ -45,7 +45,7 @@
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
     <!-- Kafka -->
-    <kafka.version>4.3.1</kafka.version>
+    <kafka.version>4.4.0</kafka.version>
 
     <!-- Prometheus — 1.9.0 or later required: HttpErrorHandlingPolicy (added in 1.9.0) keeps
          scrape exception stack traces out of HTTP responses. -->
@@ -56,7 +56,7 @@
     <log4j2.version>2.25.5</log4j2.version>
 
     <!-- JUnit -->
-    <junit.version>5.11.4</junit.version>
+    <junit.version>6.1.3</junit.version>
 
     <!-- Strimzi test container -->
     <strimzi.test.container.version>0.117.0</strimzi.test.container.version>
@@ -78,18 +78,6 @@
       <groupId>io.strimzi</groupId>
       <artifactId>kafka-oauth-client</artifactId>
       <version>${strimzi-oauth.version}</version>
-      <exclusions>
-        <!-- already on classpath via kafka-clients -->
-        <exclusion>
-          <groupId>org.apache.kafka</groupId>
-          <artifactId>kafka-clients</artifactId>
-        </exclusion>
-        <!-- already on classpath via slf4j-api -->
-        <exclusion>
-          <groupId>org.slf4j</groupId>
-          <artifactId>slf4j-api</artifactId>
-        </exclusion>
-      </exclusions>
     </dependency>
 
     <!-- Prometheus metrics (registry + official /metrics HttpHandler).

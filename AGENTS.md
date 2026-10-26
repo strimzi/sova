@@ -8,7 +8,8 @@ Docker images are built and pushed in the `strimzi-kafka-operator` repository.
 
 **Hard constraints (never violate):**
 - Metric names are a fixed contract shared with Prometheus dashboards and alerts. **Never rename a metric.**
-- GSSAPI (Kerberos) and non-OAUTHBEARER SASL mechanisms are intentionally unsupported.
+- Kafka client security (TLS, SASL) is configured only through `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`. Do not reintroduce `SOVA_TLS_*` / `SOVA_SASL_*` environment variables.
+- Values of `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` can be credentials: never log them or put them in an exception message — keys only.
 - ZooKeeper support is intentionally absent; Kafka 4.x is KRaft-only.
 - The endpoints are served via JDK built-in HTTP servers on two ports (metrics port 9404, management port 8080).
 
@@ -26,7 +27,8 @@ The public `SovaConfig(UnaryOperator<String> env)` constructor takes the environ
 Effectively immutable after creation; safe to read from any thread.
 
 **`kafka/KafkaAdminClient`** — Factory that creates and configures the `Admin` client.
-Delegates TLS setup to `TlsConfigBuilder` and SASL setup to `SaslConfigBuilder`.
+Copies the Kafka client properties from `SovaConfig.getKafkaAdminClientConfiguration()` (TLS, SASL and any other client setting) into the `Properties` verbatim, then sets `bootstrap.servers` from `SOVA_KAFKA_BOOTSTRAP_SERVERS` and the API timeout on top, so those two always win over the variable.
+There is no Sova-side security logic: the operator (or a standalone user) decides the mechanism in the variable.
 
 **`metrics/MetricsRegistry`** — Holds the most recently collected `MetricSnapshot` in a `volatile` field and registers a single `MultiCollector`, plus the JVM/process instrumentation, with a `PrometheusRegistry` it owns (deliberately not `defaultRegistry` — see invariant 8).
 `update(MetricSnapshot)` is one reference swap; every scrape reads that reference once and builds all metric families from it via `MetricsSnapshotRenderer`.
@@ -74,15 +76,6 @@ Always 200 — a failed collection must not restart the pod, since stale metrics
 
 **`http/ReadinessCheck`** — JDK `HttpHandler` that exposes `GET /ready`.
 Reports UP (200) or DOWN (503) from `MetricsCollector.isHealthy()`, which is false until the first cycle succeeds and false again once the last good snapshot is older than two collection intervals.
-
-**`kafka/auth/TlsConfigBuilder`** — Stateless utility class.
-Always reads the CA cert and sets the truststore properties, the `HTTPS` endpoint identification algorithm (hostname verification on), and `security.protocol=SSL`.
-The client cert and key are optional: when both are present it also sets the keystore type, certificate chain and key (mTLS); when both are absent the client only verifies the brokers; when exactly one is present it throws `IllegalStateException` naming `SOVA_TLS_CERT_FILE` and `SOVA_TLS_KEY_FILE`.
-When SASL is also configured, `SaslConfigBuilder` runs afterwards and overwrites that protocol.
-
-**`kafka/auth/SaslConfigBuilder`** — Stateless utility class.
-Uppercases `SASL_MECHANISM` (`Locale.ENGLISH`) and validates it is `OAUTHBEARER`, throwing otherwise; passes `SASL_JAAS_CONFIG` and `SASL_LOGIN_CALLBACK_HANDLER_CLASS` through to the Kafka client `Properties` verbatim, skipping the blank ones; then sets `security.protocol` to `SASL_SSL` or `SASL_PLAINTEXT` depending on whether TLS is enabled.
-No token-file handling — that is delegated to whichever callback handler class the operator configures.
 
 ---
 
@@ -169,24 +162,14 @@ The Strimzi operator injects these environment variables (names must never chang
 | `SOVA_GROUP_EXCLUDE_REGEX`               | Consumer group exclude pattern (only set when configured)               |
 | `SOVA_TOPIC_REGEX`                       | Topic include pattern (always set)                                      |
 | `SOVA_TOPIC_EXCLUDE_REGEX`               | Topic exclude pattern (only set when configured)                        |
-| `SOVA_TLS_ENABLED`                       | TLS on/off                                                              |
-| `SOVA_TLS_CA_CERT_FILE`                  | CA cert path                                                            |
-| `SOVA_TLS_CERT_FILE`                     | Client cert path (optional, only set for mTLS; no Sova default)         |
-| `SOVA_TLS_KEY_FILE`                      | Client key path (optional, only set for mTLS; no Sova default)          |
+| `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | Kafka client properties, one `key=value` per line, holding TLS, SASL and other client config (same name and format as the User Operator variable); no Sova default |
 | `SOVA_METRICS_PORT`                      | Metrics port (default 9404 — matches `MetricsModel.METRICS_PORT`)       |
 | `SOVA_MANAGEMENT_PORT`                   | Management port (default 8080)                                          |
-| `SOVA_SASL_MECHANISM`                    | SASL mechanism (`oauthbearer`)                                          |
-| `SOVA_SASL_JAAS_CONFIG`                  | Full `sasl.jaas.config` string passed verbatim to the Kafka client      |
-| `SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS` | `sasl.login.callback.handler.class` passed verbatim to the Kafka client |
 
 The full list the operator sets lives in `cluster-operator/src/main/java/io/strimzi/operator/cluster/model/Sova.java`.
 `SOVA_COLLECT_INTERVAL_MS` is read by `SovaConfig` but is **not** injected by the operator.
-In ServiceAccount (OAUTHBEARER) mode the operator sets only the CA variable; Sova must not require a client cert or key then.
-
-Default CA mount path (operator-managed):
-- `/etc/sova/cluster-ca-certs/cluster-ca.crt`
-
-The operator mounts the client cert and key at `/etc/sova/sova-certs/sova.crt` and `/etc/sova/sova-certs/sova.key` in mTLS mode and passes them explicitly; Sova has no default for them.
+Sova has no `SOVA_TLS_*` or `SOVA_SASL_*` variables: the operator generates the properties from the cluster's security context, puts them in `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`, and Sova merges them into the `Admin` client configuration.
+Secrets are referenced through the `${strimzisecrets:...}` config provider, never inlined.
 
 ---
 

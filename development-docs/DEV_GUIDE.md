@@ -31,7 +31,6 @@ ITs — see "Running integration tests only" below.
 mvn clean package
 cd target && unzip sova-*.zip && cd sova-*/
 export SOVA_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-export SOVA_TLS_ENABLED=false
 java -classpath "libs/*" io.strimzi.sova.Main
 ```
 

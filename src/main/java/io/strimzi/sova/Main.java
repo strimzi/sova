@@ -50,7 +50,7 @@ public class Main {
      * Application entry point.
      *
      * @param args command-line arguments (unused)
-     * @throws IOException if reading the TLS PEM files or binding either listener fails
+     * @throws IOException if binding either listener fails
      */
     public static void main(String[] args) throws IOException {
         BuildInfo buildInfo = BuildInfo.load();
@@ -58,8 +58,8 @@ public class Main {
         log.info(buildInfo.toString());
 
         SovaConfig config = new SovaConfig();
-        // Effective config for whoever debugs a pod. Paths and names only: never the JAAS config,
-        // which can carry credentials, and never file contents.
+        // Effective config for whoever debugs a pod. Names only: SovaConfig prints the keys of the
+        // Kafka client properties, never their values, which can carry credentials.
         log.info(config.toString());
 
         Admin admin = KafkaAdminClient.create(config);

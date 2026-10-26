@@ -4,8 +4,11 @@
  */
 package io.strimzi.sova.config;
 
-import java.util.Locale;
+import java.io.IOException;
+import java.io.StringReader;
 import java.util.Optional;
+import java.util.Properties;
+import java.util.TreeSet;
 import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -21,27 +24,18 @@ import java.util.regex.PatternSyntaxException;
  * <p>Threading: effectively immutable after construction; safe to read from any thread.
  */
 public final class SovaConfig {
-
-    // Environment variable names. The operator injects these; they must never change.
     private static final String ENV_KAFKA_BOOTSTRAP_SERVERS = "SOVA_KAFKA_BOOTSTRAP_SERVERS";
     private static final String ENV_GROUP_REGEX = "SOVA_GROUP_REGEX";
     private static final String ENV_GROUP_EXCLUDE_REGEX = "SOVA_GROUP_EXCLUDE_REGEX";
     private static final String ENV_TOPIC_REGEX = "SOVA_TOPIC_REGEX";
     private static final String ENV_TOPIC_EXCLUDE_REGEX = "SOVA_TOPIC_EXCLUDE_REGEX";
-    private static final String ENV_TLS_ENABLED = "SOVA_TLS_ENABLED";
-    private static final String ENV_TLS_CA_CERT_FILE = "SOVA_TLS_CA_CERT_FILE";
-    public static final String ENV_TLS_CERT_FILE = "SOVA_TLS_CERT_FILE";
-    public static final String ENV_TLS_KEY_FILE = "SOVA_TLS_KEY_FILE";
-    private static final String ENV_SASL_MECHANISM = "SOVA_SASL_MECHANISM";
-    private static final String ENV_SASL_JAAS_CONFIG = "SOVA_SASL_JAAS_CONFIG";
-    private static final String ENV_SASL_LOGIN_CALLBACK_HANDLER_CLASS = "SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS";
+    private static final String ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION = "STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION";
     private static final String ENV_METRICS_PORT = "SOVA_METRICS_PORT";
     private static final String ENV_MANAGEMENT_PORT = "SOVA_MANAGEMENT_PORT";
     private static final String ENV_COLLECT_INTERVAL_MS = "SOVA_COLLECT_INTERVAL_MS";
 
     // Defaults, shared by the environment constructor and the test constructor.
     private static final String DEFAULT_REGEX = ".*";
-    private static final String DEFAULT_TLS_CA_CERT_FILE = "/etc/sova/cluster-ca-certs/cluster-ca.crt";
     private static final int DEFAULT_METRICS_PORT = 9404;
     private static final int DEFAULT_MANAGEMENT_PORT = 8080;
     private static final long DEFAULT_COLLECT_INTERVAL_MS = 30000L;
@@ -77,49 +71,14 @@ public final class SovaConfig {
     private final Optional<Pattern> topicExcludeRegex;
 
     /**
-     * Whether TLS is enabled on the Kafka connection.
-     * Env var: {@code SOVA_TLS_ENABLED}. Default: {@code true}.
+     * Kafka client properties merged into the {@code Admin} client configuration (TLS, SASL and
+     * any other client setting), given as {@code key=value} lines.
+     * Env var: {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION}. Optional: absent means empty.
+     *
+     * <p>Not exposed directly: {@link #getKafkaAdminClientConfiguration()} returns a copy, so the
+     * config stays immutable. Values may be sensitive, so {@link #toString()} prints keys only.
      */
-    private final boolean tlsEnabled;
-
-    /**
-     * Path to the CA certificate PEM file used for TLS.
-     * Env var: {@code SOVA_TLS_CA_CERT_FILE}.
-     * Default: {@code /etc/sova/cluster-ca-certs/cluster-ca.crt}.
-     */
-    private final String tlsCaCertFile;
-
-    /**
-     * Path to the client certificate PEM file used for mutual TLS.
-     * Env var: {@code SOVA_TLS_CERT_FILE}. Optional, no default: must be set together with
-     * {@code SOVA_TLS_KEY_FILE} or not at all.
-     */
-    private final Optional<String> tlsCertFile;
-
-    /**
-     * Path to the client private-key PEM file used for mutual TLS.
-     * Env var: {@code SOVA_TLS_KEY_FILE}. Optional, no default: must be set together with
-     * {@code SOVA_TLS_CERT_FILE} or not at all.
-     */
-    private final Optional<String> tlsKeyFile;
-
-    /**
-     * SASL mechanism to use (e.g. {@code OAUTHBEARER} if set).
-     * Env var: {@code SOVA_SASL_MECHANISM}. Absent means SASL is disabled.
-     */
-    private final Optional<String> saslMechanism;
-
-    /**
-     * Full SASL JAAS config string passed verbatim to the Kafka client.
-     * Env var: {@code SOVA_SASL_JAAS_CONFIG}. Optional.
-     */
-    private final Optional<String> saslJaasConfig;
-
-    /**
-     * SASL login callback handler class name passed verbatim to the Kafka client.
-     * Env var: {@code SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS}. Optional.
-     */
-    private final Optional<String> saslLoginCallbackHandlerClass;
+    private final Properties kafkaAdminClientConfiguration;
 
     /**
      * Metrics HTTP port.
@@ -145,33 +104,26 @@ public final class SovaConfig {
      * Package-private constructor for tests — allows direct field injection without reading
      * environment variables.
      */
-    SovaConfig(String kafkaBootstrapServers, boolean tlsEnabled, String groupRegex,
-               String topicRegex) {
+    SovaConfig(String kafkaBootstrapServers, String groupRegex, String topicRegex) {
         this.kafkaBootstrapServers = kafkaBootstrapServers;
-        this.tlsEnabled = tlsEnabled;
         this.groupRegex = compilePattern(ENV_GROUP_REGEX, groupRegex);
         this.topicRegex = compilePattern(ENV_TOPIC_REGEX, topicRegex);
         this.groupExcludeRegex = Optional.empty();
         this.topicExcludeRegex = Optional.empty();
-        this.tlsCaCertFile = "";
-        this.tlsCertFile = Optional.empty();
-        this.tlsKeyFile = Optional.empty();
-        this.saslMechanism = Optional.empty();
-        this.saslJaasConfig = Optional.empty();
-        this.saslLoginCallbackHandlerClass = Optional.empty();
+        this.kafkaAdminClientConfiguration = new Properties();
         this.metricsPort = DEFAULT_METRICS_PORT;
         this.managementPort = DEFAULT_MANAGEMENT_PORT;
         this.collectIntervalMs = DEFAULT_COLLECT_INTERVAL_MS;
     }
 
     /**
-     * Creates a minimal config suitable for tests against a plain (no-TLS) Kafka broker.
+     * Creates a minimal config suitable for tests against a plain Kafka broker.
      *
      * @param bootstrapServers Kafka bootstrap address
      * @return config instance
      */
     public static SovaConfig forTesting(String bootstrapServers) {
-        return new SovaConfig(bootstrapServers, false, DEFAULT_REGEX, DEFAULT_REGEX);
+        return new SovaConfig(bootstrapServers, DEFAULT_REGEX, DEFAULT_REGEX);
     }
 
     /**
@@ -198,13 +150,8 @@ public final class SovaConfig {
         topicRegex = compilePattern(ENV_TOPIC_REGEX, getEnv(env, ENV_TOPIC_REGEX, DEFAULT_REGEX));
         topicExcludeRegex = optionalEnv(env, ENV_TOPIC_EXCLUDE_REGEX)
                 .map(v -> compilePattern(ENV_TOPIC_EXCLUDE_REGEX, v));
-        tlsEnabled = parseBooleanOrThrow(ENV_TLS_ENABLED, getEnv(env, ENV_TLS_ENABLED, "true"));
-        tlsCaCertFile = getEnv(env, ENV_TLS_CA_CERT_FILE, DEFAULT_TLS_CA_CERT_FILE);
-        tlsCertFile = optionalEnv(env, ENV_TLS_CERT_FILE);
-        tlsKeyFile = optionalEnv(env, ENV_TLS_KEY_FILE);
-        saslMechanism = optionalEnv(env, ENV_SASL_MECHANISM);
-        saslJaasConfig = optionalEnv(env, ENV_SASL_JAAS_CONFIG);
-        saslLoginCallbackHandlerClass = optionalEnv(env, ENV_SASL_LOGIN_CALLBACK_HANDLER_CLASS);
+        kafkaAdminClientConfiguration = parseProperties(ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION,
+                env.apply(ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION));
         metricsPort = parsePortOrThrow(ENV_METRICS_PORT,
                 getEnv(env, ENV_METRICS_PORT, String.valueOf(DEFAULT_METRICS_PORT)));
         managementPort = parsePortOrThrow(ENV_MANAGEMENT_PORT,
@@ -287,29 +234,26 @@ public final class SovaConfig {
     }
 
     /**
-     * Parses a strict boolean, reporting the environment variable that carried it.
+     * Parses {@code key=value} lines in {@link Properties} format, reporting the environment
+     * variable that carried them.
      *
-     * <p>{@link Boolean#parseBoolean(String)} accepts only case-insensitive {@code "true"} and
-     * silently treats everything else — {@code "1"}, {@code "yes"}, a typo — as {@code false}.
-     * For a flag that turns a security control on or off, that fails open instead of failing
-     * loudly, so this accepts only case-insensitive {@code true}/{@code false} and rejects
-     * anything else.
+     * <p>The value is deliberately left out of the failure message: it may hold credentials.
      *
      * @param envVarName the variable the value came from, used in the failure message
-     * @param value      the raw value
-     * @return the parsed boolean
-     * @throws IllegalStateException if the value is not {@code true} or {@code false}
+     * @param value      the raw value, or {@code null} when the variable is not set
+     * @return the parsed properties, empty when the value is {@code null}
+     * @throws IllegalStateException if the value is not valid properties syntax
      */
-    static boolean parseBooleanOrThrow(String envVarName, String value) {
-        String normalized = value.toLowerCase(Locale.ENGLISH);
-        if ("true".equals(normalized)) {
-            return true;
+    static Properties parseProperties(String envVarName, String value) {
+        Properties properties = new Properties();
+        if (value != null) {
+            try {
+                properties.load(new StringReader(value));
+            } catch (IOException | IllegalArgumentException e) {
+                throw new IllegalStateException("Invalid properties in " + envVarName, e);
+            }
         }
-        if ("false".equals(normalized)) {
-            return false;
-        }
-        throw new IllegalStateException(
-                "Invalid boolean in " + envVarName + ": " + value + " (must be true or false)");
+        return properties;
     }
 
     /**
@@ -362,39 +306,11 @@ public final class SovaConfig {
         return topicExcludeRegex;
     }
 
-    /** @return whether TLS is enabled */
-    public boolean isTlsEnabled() {
-        return tlsEnabled;
-    }
-
-    /** @return CA certificate PEM file path */
-    public String getTlsCaCertFile() {
-        return tlsCaCertFile;
-    }
-
-    /** @return client certificate PEM file path, if mutual TLS is configured */
-    public Optional<String> getTlsCertFile() {
-        return tlsCertFile;
-    }
-
-    /** @return client private-key PEM file path, if mutual TLS is configured */
-    public Optional<String> getTlsKeyFile() {
-        return tlsKeyFile;
-    }
-
-    /** @return SASL mechanism, if configured */
-    public Optional<String> getSaslMechanism() {
-        return saslMechanism;
-    }
-
-    /** @return SASL JAAS config string, if configured */
-    public Optional<String> getSaslJaasConfig() {
-        return saslJaasConfig;
-    }
-
-    /** @return SASL login callback handler class name, if configured */
-    public Optional<String> getSaslLoginCallbackHandlerClass() {
-        return saslLoginCallbackHandlerClass;
+    /** @return a copy of the Kafka client properties to merge into the {@code Admin} configuration */
+    public Properties getKafkaAdminClientConfiguration() {
+        Properties copy = new Properties();
+        copy.putAll(kafkaAdminClientConfiguration);
+        return copy;
     }
 
     /** @return metrics HTTP port */
@@ -420,13 +336,7 @@ public final class SovaConfig {
             "\n\tgroupExcludeRegex=" + groupExcludeRegex +
             "\n\ttopicRegex=" + topicRegex +
             "\n\ttopicExcludeRegex=" + topicExcludeRegex +
-            "\n\ttlsEnabled=" + tlsEnabled +
-            "\n\ttlsCaCertFile='" + tlsCaCertFile + '\'' +
-            "\n\ttlsCertFile=" + tlsCertFile +
-            "\n\ttlsKeyFile=" + tlsKeyFile +
-            "\n\tsaslMechanism=" + saslMechanism +
-            "\n\tsaslJaasConfig=" + saslJaasConfig.map(v -> "<set>").orElse("<unset>") +
-            "\n\tsaslLoginCallbackHandlerClass=" + saslLoginCallbackHandlerClass +
+            "\n\tkafkaAdminClientConfigurationKeys=" + new TreeSet<>(kafkaAdminClientConfiguration.stringPropertyNames()) +
             "\n\tmetricsPort=" + metricsPort +
             "\n\tmanagementPort=" + managementPort +
             "\n\tcollectIntervalMs=" + collectIntervalMs +

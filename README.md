@@ -17,29 +17,35 @@ Unpack the ZIP and run the `Main` class on the classpath, with configuration sup
 ```bash
 unzip sova-*.zip && cd sova-*/
 export SOVA_KAFKA_BOOTSTRAP_SERVERS=kafka-bootstrap:9093
-export SOVA_TLS_CA_CERT_FILE=/etc/certs/ca.crt
-export SOVA_TLS_CERT_FILE=/etc/certs/sova.crt
-export SOVA_TLS_KEY_FILE=/etc/certs/sova.key
+export STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION='security.protocol=SSL
+ssl.truststore.type=PEM
+ssl.truststore.certificates=${strimzisecrets:my-ns/my-cluster-cluster-ca-cert:ca.crt}'
 java -classpath "libs/*" io.strimzi.sova.Main
 ```
 
-Metrics are available at `http://localhost:9404/metrics`. 
+Metrics are available at `http://localhost:9404/metrics`.
 The liveness probe is at `http://localhost:8080/healthy` and the readiness probe at `http://localhost:8080/ready`.
 
-TLS is **on by default** (`SOVA_TLS_ENABLED=true`), because that is what the operator configures.
-Set it to `false` to talk to a plaintext listener.
+### Authentication
 
-### Supported authentication
+Sova connects to Kafka in plaintext unless told otherwise.
+TLS, mutual TLS, SASL and any other Kafka client setting are configured through `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`.
+Its value is Kafka client properties, one `key=value` per line, in the same format as the User Operator variable of the same name.
+Every entry is passed to the Kafka `Admin` client as it is, for example:
 
-| Mode                      | Configuration                                                                                                                                                                                              |
-|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Plaintext                 | `SOVA_TLS_ENABLED=false`                                                                                                                                                                                   |
-| TLS (server verification) | `SOVA_TLS_CA_CERT_FILE` only                                                                                                                                                                               |
-| Mutual TLS                | `SOVA_TLS_CA_CERT_FILE`, `SOVA_TLS_CERT_FILE` and `SOVA_TLS_KEY_FILE`                                                                                                                                      |
-| SASL `OAUTHBEARER`        | `SOVA_SASL_MECHANISM=oauthbearer`, plus `SOVA_SASL_JAAS_CONFIG` and `SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS`, passed verbatim to the Kafka client; combine with TLS (`SASL_SSL`) or not (`SASL_PLAINTEXT`) |
+```properties
+security.protocol=SSL
+ssl.truststore.type=PEM
+ssl.truststore.certificates=${strimzisecrets:my-ns/my-cluster-cluster-ca-cert:ca.crt}
+```
 
-Other SASL mechanisms and Kerberos (GSSAPI) are not supported.
-The client certificate and key are optional, but must be set together: setting only one of them fails at startup.
+`SOVA_KAFKA_BOOTSTRAP_SERVERS` always sets `bootstrap.servers` and takes precedence over the same key in this variable, as does the Admin client API timeout.
+A value that is not valid properties syntax fails Sova at startup.
+
+> **Note:** Environment variables are visible in the Pod spec.
+> Do not put credentials in this variable.
+> Reference secrets through a Kafka configuration provider, as in the example above.
+> At startup, Sova logs only the keys of this variable, never the values.
 
 The `/metrics` endpoint is served over plain HTTP.
 
@@ -82,25 +88,19 @@ The `process_*` and `jvm_*` families are exported too.
 
 ## Configuration
 
-| Environment variable                     | Default                                     | Description                                                             |
-|------------------------------------------|---------------------------------------------|-------------------------------------------------------------------------|
-| `SOVA_KAFKA_BOOTSTRAP_SERVERS`           | *(required)*                                | Kafka bootstrap server(s), e.g. `kafka:9093`                            |
-| `SOVA_GROUP_REGEX`                       | `.*`                                        | Consumer group include regex                                            |
-| `SOVA_GROUP_EXCLUDE_REGEX`               | *(none)*                                    | Consumer group exclude regex                                            |
-| `SOVA_TOPIC_REGEX`                       | `.*`                                        | Topic include regex                                                     |
-| `SOVA_TOPIC_EXCLUDE_REGEX`               | *(none)*                                    | Topic exclude regex                                                     |
-| `SOVA_TLS_ENABLED`                       | `true`                                      | Enable TLS on the Kafka connection                                      |
-| `SOVA_TLS_CA_CERT_FILE`                  | `/etc/sova/cluster-ca-certs/cluster-ca.crt` | CA certificate PEM path                                                 |
-| `SOVA_TLS_CERT_FILE`                     | *(none)*                                    | Client certificate PEM path (mutual TLS). Set together with the key     |
-| `SOVA_TLS_KEY_FILE`                      | *(none)*                                    | Client private-key PEM path (mutual TLS). Set together with the cert    |
-| `SOVA_METRICS_PORT`                      | `9404`                                      | Port for `/metrics` endpoint                                            |
-| `SOVA_MANAGEMENT_PORT`                   | `8080`                                      | Port for `/healthy` and `/ready` endpoints                              |
-| `SOVA_SASL_MECHANISM`                    | *(none)*                                    | SASL mechanism (`OAUTHBEARER`)                                          |
-| `SOVA_SASL_JAAS_CONFIG`                  | *(none)*                                    | Full `sasl.jaas.config` string passed verbatim to the Kafka client      |
-| `SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS` | *(none)*                                    | `sasl.login.callback.handler.class` passed verbatim to the Kafka client |
-| `SOVA_COLLECT_INTERVAL_MS`               | `30000`                                     | Metrics collection interval in milliseconds                             |
-| `STRIMZI_LOG_LEVEL`                      | `INFO`                                      | Root log level                                                          |
-| `STRIMZI_AC_LOG_LEVEL`                   | `WARN`                                      | Log level for the `org.apache.kafka` logger                             |
+| Environment variable                       | Default      | Description                                                                        |
+|--------------------------------------------|--------------|------------------------------------------------------------------------------------|
+| `SOVA_KAFKA_BOOTSTRAP_SERVERS`             | *(required)* | Kafka bootstrap server(s), e.g. `kafka:9093`                                       |
+| `SOVA_GROUP_REGEX`                         | `.*`         | Consumer group include regex                                                       |
+| `SOVA_GROUP_EXCLUDE_REGEX`                 | *(none)*     | Consumer group exclude regex                                                       |
+| `SOVA_TOPIC_REGEX`                         | `.*`         | Topic include regex                                                                |
+| `SOVA_TOPIC_EXCLUDE_REGEX`                 | *(none)*     | Topic exclude regex                                                                |
+| `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | *(none)*     | Kafka client properties, one `key=value` per line (TLS, SASL, other client config) |
+| `SOVA_METRICS_PORT`                        | `9404`       | Port for `/metrics` endpoint                                                       |
+| `SOVA_MANAGEMENT_PORT`                     | `8080`       | Port for `/healthy` and `/ready` endpoints                                         |
+| `SOVA_COLLECT_INTERVAL_MS`                 | `30000`      | Metrics collection interval in milliseconds                                        |
+| `STRIMZI_LOG_LEVEL`                        | `INFO`       | Root log level                                                                     |
+| `STRIMZI_AC_LOG_LEVEL`                     | `WARN`       | Log level for the `org.apache.kafka` logger                                        |
 
 ### Health endpoints
 
@@ -110,8 +110,6 @@ The `process_*` and `jvm_*` families are exported too.
 Only a successful collection cycle replaces the snapshot, so failing cycles and cycles that hang - which throw nothing - both turn the probe DOWN once the exported numbers are frozen for that long. 
 Before the first cycle completes there is no snapshot, so the probe is DOWN.
 
-> **Note:** The `kafka-oauth-client` jar (providing `JaasClientOauthLoginCallbackHandler`) is bundled in the distributed zip. 
-> No extra classpath setup is required when using `SOVA_SASL_LOGIN_CALLBACK_HANDLER_CLASS=io.strimzi.kafka.oauth.client.JaasClientOauthLoginCallbackHandler`.
 
 ---
 
