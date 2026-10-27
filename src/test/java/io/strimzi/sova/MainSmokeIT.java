@@ -31,7 +31,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the operator does, and checks what an operator-deployed pod would expose.
  */
 class MainSmokeIT {
-
     private static final Duration WAIT = Duration.ofSeconds(60);
 
     private static final HttpClient HTTP = HttpClient.newHttpClient();
@@ -55,10 +54,16 @@ class MainSmokeIT {
     }
 
     @Test
-    void servesMetricsAndReportsReadyAgainstARealCluster() throws Exception {
+    void servesMetricsReportsReadyAndLogsOnlyTheKeysOfTheClientConfiguration() throws Exception {
         int metricsPort = freePort();
         int managementPort = freePort();
-        Process sova = startSova(KafkaTestResourceManager.getBootstrapServers(), metricsPort, managementPort);
+        Path log = tempDir.resolve("sova.log");
+        // sasl.jaas.config stands in for a credential: Sova must log the key, never the value.
+        Process sova = startSova(metricsPort, managementPort,
+                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION",
+                        "bootstrap.servers=" + kafkaManager.getBootstrapServers() + "\n"
+                        + "client.id=sova-smoke-it\nsasl.jaas.config=top-secret-credentials\n"),
+                log);
         try {
             awaitStatus(managementPort, "/ready", 200);
 
@@ -68,26 +73,7 @@ class MainSmokeIT {
             assertTrue(metrics.body().contains("kafka_brokers 1.0"), metrics.body());
             // The management port must not expose the metrics.
             assertEquals(404, get(managementPort, "/metrics").statusCode());
-        } finally {
-            sova.destroy();
-            sova.waitFor();
-        }
-    }
 
-    @Test
-    void acceptsClientConfigurationAndLogsOnlyItsKeys() throws Exception {
-        int metricsPort = freePort();
-        int managementPort = freePort();
-        Path log = tempDir.resolve("sova.log");
-        // sasl.jaas.config stands in for a credential: Sova must log the key, never the value.
-        Process sova = startSova(KafkaTestResourceManager.getBootstrapServers(), metricsPort, managementPort,
-                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION",
-                        "client.id=sova-smoke-it\nsasl.jaas.config=top-secret-credentials\n"),
-                log);
-        try {
-            awaitStatus(managementPort, "/ready", 200);
-
-            assertTrue(get(metricsPort, "/metrics").body().contains("kafka_brokers 1.0"));
             String output = Files.readString(log);
             assertTrue(output.contains("client.id") && output.contains("sasl.jaas.config"),
                     "the keys of the client configuration must be logged, was: " + output);
@@ -100,66 +86,41 @@ class MainSmokeIT {
     }
 
     @Test
-    void clientConfigurationReachesTheAdminClient() throws Exception {
-        int metricsPort = freePort();
-        int managementPort = freePort();
-        // The test broker speaks plaintext. If this setting reaches the Admin client it tries a TLS
-        // handshake against it and never collects; if it were ignored, Sova would turn Ready within
-        // seconds, as in the test above.
-        Process sova = startSova(KafkaTestResourceManager.getBootstrapServers(), metricsPort, managementPort,
-                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION", "security.protocol=SSL\n"), null);
-        try {
-            awaitStatus(managementPort, "/healthy", 200);
-            Thread.sleep(Duration.ofSeconds(5));
-
-            assertEquals(503, get(managementPort, "/ready").statusCode(),
-                    "security.protocol=SSL must have been applied to the Admin client");
-        } finally {
-            sova.destroy();
-            sova.waitFor();
-        }
-    }
-
-    @Test
     void isLiveButNotReadyWhenTheClusterIsUnreachable() throws Exception {
         int metricsPort = freePort();
         int managementPort = freePort();
         // Nothing listens on this port: the first cycle can never succeed.
-        Process sova = startSova("localhost:" + freePort(), metricsPort, managementPort);
+        Process sova = startSova(metricsPort, managementPort,
+                Map.of("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION",
+                        "bootstrap.servers=localhost:" + freePort() + "\n"),
+                null);
         try {
             awaitStatus(managementPort, "/healthy", 200);
 
             assertEquals(503, get(managementPort, "/ready").statusCode(),
                     "a pod that has never collected anything must not be Ready");
-            // Liveness must stay up, otherwise a Kafka outage restarts the pod.
-            assertEquals(200, get(managementPort, "/healthy").statusCode());
         } finally {
             sova.destroy();
             sova.waitFor();
         }
     }
 
-    private static Process startSova(String bootstrapServers, int metricsPort, int managementPort)
-            throws IOException {
-        return startSova(bootstrapServers, metricsPort, managementPort, Map.of(), null);
-    }
-
     /**
      * Starts Sova in a child JVM.
      *
-     * @param extraEnv additional environment variables for the child
+     * @param extraEnv additional environment variables for the child, including
+     *                 {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} with {@code bootstrap.servers}
      * @param logFile  where to write the child's output, or {@code null} to inherit this process's
      */
-    private static Process startSova(String bootstrapServers, int metricsPort, int managementPort,
+    private static Process startSova(int metricsPort, int managementPort,
                                      Map<String, String> extraEnv, Path logFile) throws IOException {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         ProcessBuilder pb = new ProcessBuilder(java, "-cp", System.getProperty("java.class.path"),
                 Main.class.getName());
         Map<String, String> env = pb.environment();
-        env.put("SOVA_KAFKA_BOOTSTRAP_SERVERS", bootstrapServers);
-        env.put("SOVA_METRICS_PORT", String.valueOf(metricsPort));
-        env.put("SOVA_MANAGEMENT_PORT", String.valueOf(managementPort));
-        env.put("SOVA_COLLECT_INTERVAL_MS", "1000");
+        env.put("STRIMZI_METRICS_PORT", String.valueOf(metricsPort));
+        env.put("STRIMZI_MANAGEMENT_PORT", String.valueOf(managementPort));
+        env.put("STRIMZI_COLLECT_INTERVAL_MS", "1000");
         env.putAll(extraEnv);
         pb.redirectErrorStream(true);
         pb.redirectOutput(logFile == null

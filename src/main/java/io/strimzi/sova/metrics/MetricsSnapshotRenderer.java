@@ -36,7 +36,6 @@ import io.strimzi.sova.metrics.MetricSnapshot.PartitionMetrics;
  * limit of 20.
  */
 final class MetricsSnapshotRenderer {
-
     // Label names are part of the same contract as the metric names: dashboards query by them.
     private static final String LABEL_TOPIC = "topic";
     private static final String LABEL_PARTITION = "partition";
@@ -227,7 +226,7 @@ final class MetricsSnapshotRenderer {
                     "version", info.version(),
                     "revision", info.revision(),
                     "branch", info.branch(),
-                    "javaversion", info.javaVersion()))
+                    "java_info", info.javaVersion()))
                 .build())
             .build();
     }

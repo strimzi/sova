@@ -15,7 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
  * Unit tests for {@link BuildInfo}.
  */
 class BuildInfoTest {
-
     private static Properties props(String version, String revision, String branch) {
         Properties props = new Properties();
         if (version != null) {
@@ -44,25 +43,15 @@ class BuildInfoTest {
         assertEquals(new BuildInfo("unknown", "unknown", "unknown", "unknown"), info);
     }
 
-    @Test
-    void blankValuesAreUnknown() {
-        BuildInfo info = BuildInfo.from(props("0.1.0", "", "  "), "21.0.3");
-
-        assertEquals("unknown", info.revision());
-        assertEquals("unknown", info.branch());
-    }
-
     /**
-     * Without a {@code .git} directory the plugin writes only the keys it can resolve, so the
-     * version is still known while revision and branch are not.
+     * Blank and missing values both become {@code unknown}, and either way the version is still
+     * known: without a {@code .git} directory the plugin writes only the keys it can resolve.
      */
     @Test
-    void buildWithoutGitDirectoryStillKnowsTheVersion() {
-        BuildInfo info = BuildInfo.from(props("0.1.0", null, null), "21.0.3");
+    void blankAndMissingValuesAreUnknownButTheVersionIsStillKnown() {
+        BuildInfo info = BuildInfo.from(props("0.1.0", "  ", null), "21.0.3");
 
-        assertEquals("0.1.0", info.version());
-        assertEquals("unknown", info.revision());
-        assertEquals("unknown", info.branch());
+        assertEquals(new BuildInfo("0.1.0", "unknown", "unknown", "21.0.3"), info);
     }
 
     /**

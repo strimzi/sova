@@ -25,24 +25,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Unit tests for {@link CollectorUtils}. No Kafka broker needed.
  */
 class CollectorUtilsTest {
-
     private static final Pattern ALL = Pattern.compile(".*");
 
     @Test
-    void includeMustMatchWholeValue() {
-        assertTrue(CollectorUtils.matches("my-topic", Pattern.compile("my-.*"), Optional.empty()));
-        assertFalse(CollectorUtils.matches("other", Pattern.compile("my-.*"), Optional.empty()));
-    }
+    void matchesRequiresTheWholeValueToBeIncludedAndNotExcluded() {
+        Pattern include = Pattern.compile("my-.*");
+        Optional<Pattern> excludeInternal = Optional.of(Pattern.compile("__.*"));
 
-    @Test
-    void excludeWinsOverInclude() {
-        assertFalse(CollectorUtils.matches("__consumer_offsets", ALL,
-                Optional.of(Pattern.compile("__.*"))));
-    }
-
-    @Test
-    void absentExcludeExcludesNothing() {
-        assertTrue(CollectorUtils.matches("__consumer_offsets", ALL, Optional.empty()));
+        assertTrue(CollectorUtils.matches("my-topic", include, Optional.empty()));
+        assertFalse(CollectorUtils.matches("other", include, Optional.empty()),
+                "the include pattern must match the whole value");
+        assertFalse(CollectorUtils.matches("__consumer_offsets", ALL, excludeInternal),
+                "exclude must win over include");
+        assertTrue(CollectorUtils.matches("__consumer_offsets", ALL, Optional.empty()),
+                "an absent exclude must exclude nothing");
     }
 
     @Test

@@ -20,8 +20,7 @@ import org.slf4j.LoggerFactory;
  * <p>Threading: stateless utility class — thread-safe.
  */
 final class CollectorUtils {
-
-    private static final Logger log = LoggerFactory.getLogger(CollectorUtils.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(CollectorUtils.class);
 
     private CollectorUtils() {
     }
@@ -82,7 +81,7 @@ final class CollectorUtils {
                 resolved.put(entry.getKey(), entry.getValue().get());
             } catch (ExecutionException e) {
                 lastFailure = e.getCause() != null ? e.getCause() : e;
-                log.debug("Skipping {} '{}' this cycle: {}", kind, entry.getKey(), lastFailure.toString());
+                LOGGER.debug("Skipping {} '{}' this cycle: {}", kind, entry.getKey(), lastFailure.toString());
             }
         }
 
@@ -97,7 +96,7 @@ final class CollectorUtils {
 
         // Partial failure is the case this helper exists for, but it must not be invisible: a
         // steadily rising count is how a half-broken cluster or a partial ACL change shows up.
-        log.warn("Dropped {} of {} {} results this cycle, last failure: {}",
+        LOGGER.warn("Dropped {} of {} {} results this cycle, last failure: {}",
             failed, futures.size(), kind, lastFailure.toString());
         return resolved;
     }

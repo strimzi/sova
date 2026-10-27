@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import io.strimzi.sova.config.SovaConfig;
 import io.strimzi.sova.metrics.MetricsRegistry;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -26,7 +25,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * starts. No Kafka broker is involved.
  */
 class MetricsCollectorThreadingTest {
-
     private static final SovaConfig CONFIG = SovaConfig.forTesting("localhost:9092");
 
     /**
@@ -58,16 +56,25 @@ class MetricsCollectorThreadingTest {
         }
     }
 
+    /**
+     * A cycle interrupted by shutdown must leave the interrupt flag set: {@code collect()}
+     * swallows the {@link InterruptedException} so the schedule survives, and the executor
+     * shutting the pod down cannot finish tearing down if the flag is lost with it.
+     */
     @Test
-    void collectDoesNotThrowOnAnError() {
+    void anInterruptedCycleRestoresTheInterruptFlag() {
         MetricsCollector collector = new MetricsCollector(null, new MetricsRegistry(), CONFIG) {
             @Override
-            void collectInternal() {
-                throw new NoClassDefFoundError("simulated");
+            void collectInternal() throws InterruptedException {
+                throw new InterruptedException("simulated shutdown");
             }
         };
 
-        assertDoesNotThrow(collector::collect);
+        collector.collect();
+
+        // Thread.interrupted() reads and clears, so the rest of the suite runs uninterrupted.
+        assertTrue(Thread.interrupted(),
+                "the interrupt flag must be restored after collect() swallows the interruption");
     }
 
     /**

@@ -4,14 +4,15 @@
  */
 package io.strimzi.sova.metrics.collectors;
 
-import java.util.Map;
-
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import io.strimzi.sova.config.SovaConfig;
-import io.strimzi.sova.metrics.MetricSnapshot;
 import io.strimzi.sova.metrics.MetricsRegistry;
+import io.strimzi.sova.metrics.TestSnapshots;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -22,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * publishing snapshots stamped with chosen collection times.
  */
 class MetricsCollectorHealthTest {
-
     /** The default 30 s interval, so a snapshot goes stale after 60 s. */
     private static final long INTERVAL_MS = 30_000L;
 
@@ -38,9 +38,9 @@ class MetricsCollectorHealthTest {
      * @param ageMs how long ago the snapshot was collected
      */
     private void publishSnapshotAged(long ageMs) {
-        registry.update(new MetricSnapshot(0, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-                Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-                System.currentTimeMillis() - ageMs));
+        registry.update(TestSnapshots.builder()
+                .collectedAtMs(System.currentTimeMillis() - ageMs)
+                .build());
     }
 
     @Test
@@ -49,19 +49,27 @@ class MetricsCollectorHealthTest {
                 "readiness must be DOWN until the first collection cycle has succeeded");
     }
 
-    @Test
-    void aFailedCycleBeforeAnySuccessLeavesReadinessDown() {
-        collector.collect();
+    /**
+     * Readiness follows the snapshot age alone. The window is two intervals — 60 s at the default
+     * {@link #INTERVAL_MS} — so anything inside it is UP and anything past it is DOWN. A run of
+     * failed cycles and a cycle that never returns both surface here, since neither replaces the
+     * snapshot.
+     *
+     * @param ageMs         how long ago the served snapshot was collected
+     * @param expectedUp    whether readiness must report UP
+     * @param why           what the case stands for, used as the failure message
+     */
+    @ParameterizedTest(name = "{2}")
+    @CsvSource({
+        "0,     true,  a cycle that just succeeded must report UP",
+        // One second of margin: the clock is read again inside isHealthy().
+        "59000, true,  a snapshot still inside the staleness window must report UP",
+        "61000, false, a snapshot past the staleness window must report DOWN",
+    })
+    void readinessFollowsTheAgeOfTheServedSnapshot(long ageMs, boolean expectedUp, String why) {
+        publishSnapshotAged(ageMs);
 
-        assertFalse(collector.isHealthy(),
-                "a pod that has never collected anything must not be marked Ready");
-    }
-
-    @Test
-    void aFreshlyCollectedSnapshotIsHealthy() {
-        publishSnapshotAged(0);
-
-        assertTrue(collector.isHealthy(), "a cycle that just succeeded must report UP");
+        assertEquals(expectedUp, collector.isHealthy(), why);
     }
 
     @Test
@@ -75,36 +83,5 @@ class MetricsCollectorHealthTest {
 
         assertTrue(collector.isHealthy(),
                 "one failed cycle inside the staleness window must not flip the probe");
-    }
-
-    @Test
-    void aSuccessfulCycleRecoversReadinessImmediately() {
-        publishSnapshotAged(2 * INTERVAL_MS + 1_000);
-        assertFalse(collector.isHealthy());
-
-        publishSnapshotAged(0);
-
-        assertTrue(collector.isHealthy(), "recovery must be immediate, not gradual");
-    }
-
-    /**
-     * Covers both a run of failed cycles and a cycle that never returns: neither replaces the
-     * snapshot, so its age is the only signal.
-     */
-    @Test
-    void aSnapshotOlderThanTheStalenessWindowFlipsReadinessDown() {
-        publishSnapshotAged(2 * INTERVAL_MS + 1_000);
-
-        assertFalse(collector.isHealthy(),
-                "when the snapshot stops being replaced, staleness is the only signal that the "
-                        + "exported metrics have stopped tracking the cluster");
-    }
-
-    @Test
-    void aSnapshotInsideTheStalenessWindowStaysHealthy() {
-        publishSnapshotAged(INTERVAL_MS);
-
-        assertTrue(collector.isHealthy(),
-                "one missed interval is normal jitter and must not flap the probe");
     }
 }

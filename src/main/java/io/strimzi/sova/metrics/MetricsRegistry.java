@@ -22,7 +22,6 @@ import io.prometheus.metrics.model.snapshots.MetricSnapshots;
  * leave the cluster, because nothing is carried over from the previous call.
  */
 public class MetricsRegistry {
-
     /**
      * The Prometheus registry this instance collects into, and the one the {@code /metrics}
      * handler scrapes.

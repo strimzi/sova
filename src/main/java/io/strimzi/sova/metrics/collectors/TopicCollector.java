@@ -28,8 +28,7 @@ import io.strimzi.sova.metrics.MetricSnapshot.PartitionMetrics;
  * Collects topic partition topology and offset metadata via {@code AdminClient}.
  */
 final class TopicCollector {
-
-    private static final Logger log = LoggerFactory.getLogger(TopicCollector.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(TopicCollector.class);
 
     private TopicCollector() {
     }
@@ -77,7 +76,7 @@ final class TopicCollector {
                 filtered.add(topic);
             }
         }
-        log.debug("Topics: {} total, {} after filtering", allTopics.size(), filtered.size());
+        LOGGER.debug("Topics: {} total, {} after filtering", allTopics.size(), filtered.size());
 
         // Per-topic futures rather than allTopicNames(): a topic deleted between listTopics and
         // describeTopics must cost us that topic, not the whole cycle.
@@ -88,7 +87,7 @@ final class TopicCollector {
     }
 
     private static TopicData buildTopicData(Admin admin, Map<String, TopicDescription> descriptions)
-        throws ExecutionException, InterruptedException, CollectionFailedException {
+        throws InterruptedException, CollectionFailedException {
         Map<String, Integer> partitionCounts = new HashMap<>();
         Map<TopicPartition, PartitionMetrics> partitions = new HashMap<>();
 
@@ -106,7 +105,7 @@ final class TopicCollector {
         return new TopicData(partitionCounts, partitions, offsets.latest(), offsets.earliest());
     }
 
-    private static PartitionMetrics partitionMetrics(TopicPartitionInfo info) {
+    static PartitionMetrics partitionMetrics(TopicPartitionInfo info) {
         int leaderId = info.leader() != null ? info.leader()
             .id() : -1;
         boolean preferred = !info.replicas()

@@ -31,7 +31,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * produces no series, and so on) — not from running the collector and recording its output.
  */
 class ConsumerGroupCollectorTest {
-
     private static final Predicate<String> ALL_TOPICS = topic -> true;
 
     @Test
@@ -53,7 +52,7 @@ class ConsumerGroupCollectorTest {
     }
 
     @Test
-    void uncommittedPartitionsAreSynthesisedAsMinusOne() {
+    void uncommittedPartitionsAreSynthesisedAsMinusOneAndExcludedFromBothSums() {
         TopicPartition tp0 = new TopicPartition("t", 0);
         TopicPartition tp1 = new TopicPartition("t", 1);
         TopicPartition tp2 = new TopicPartition("t", 2);
@@ -72,18 +71,6 @@ class ConsumerGroupCollectorTest {
         assertEquals(-1L, result.lags().get(key1),
                 "an uncommitted partition must be synthesised as -1 in lags");
         assertEquals(-1L, result.lags().get(key2));
-    }
-
-    @Test
-    void minusOneIsExcludedFromBothSums() {
-        TopicPartition tp0 = new TopicPartition("t", 0);
-        TopicPartition tp1 = new TopicPartition("t", 1);
-        TopicPartition tp2 = new TopicPartition("t", 2);
-        ConsumerGroupData groups = withCommitted(Map.of("g", Map.of(tp0, new OffsetAndMetadata(50L))));
-        TopicData topicData = topicData(Map.of("t", 3),
-                Map.of(tp0, 200L, tp1, 200L, tp2, 200L));
-
-        ConsumerGroupData result = ConsumerGroupCollector.computeLag(groups, ALL_TOPICS, topicData);
 
         ConsumerGroupTopicKey topicKey = new ConsumerGroupTopicKey("g", "t");
         // Only partition 0 was really committed: offset 50, lag 200 - 50 = 150. Summing the two

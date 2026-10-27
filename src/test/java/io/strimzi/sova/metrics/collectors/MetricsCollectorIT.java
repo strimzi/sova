@@ -4,9 +4,8 @@
  */
 package io.strimzi.sova.metrics.collectors;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -27,18 +26,16 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import io.prometheus.metrics.config.EscapingScheme;
-import io.prometheus.metrics.expositionformats.PrometheusTextFormatWriter;
 import io.strimzi.sova.config.SovaConfig;
 import io.strimzi.sova.integration.KafkaTestResourceManager;
 import io.strimzi.sova.metrics.MetricsRegistry;
+import io.strimzi.sova.metrics.TestSnapshots;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SuppressWarnings("checkstyle:ClassDataAbstractionCoupling")
 class MetricsCollectorIT {
-
     private static KafkaTestResourceManager kafkaManager;
     private static Admin admin;
     private static MetricsCollector collector;
@@ -49,7 +46,7 @@ class MetricsCollectorIT {
     static void startKafka() {
         kafkaManager = new KafkaTestResourceManager();
         kafkaManager.start();
-        bootstrapServers = KafkaTestResourceManager.getBootstrapServers();
+        bootstrapServers = kafkaManager.getBootstrapServers();
 
         Properties adminProps = new Properties();
         adminProps.put("bootstrap.servers", bootstrapServers);
@@ -70,45 +67,34 @@ class MetricsCollectorIT {
         }
     }
 
+    /**
+     * The broker, topic and offset families all come out of the same cycle, so one topic and one
+     * collection covers them: separate tests would only buy separate round trips to the broker.
+     */
     @Test
-    void brokerMetricsReflectClusterSize() throws Exception {
+    void brokerTopicAndOffsetMetricsReflectTheCluster() throws Exception {
+        String topic = "test-partitions";
+        admin.createTopics(List.of(new NewTopic(topic, 3, (short) 1)))
+                .all().get();
+        produce(topic, 0, 10);
+
         collector.collectInternal();
 
         String scraped = scrape();
         assertMetricValue(scraped, "kafka_brokers", "1.0");
-    }
-
-    @Test
-    void topicPartitionMetrics() throws Exception {
-        admin.createTopics(List.of(new NewTopic("test-partitions", 3, (short) 1)))
-                .all().get();
-
-        collector.collectInternal();
-
-        String scraped = scrape();
-        assertMetricWithLabels(scraped, "kafka_topic_partitions", "topic=\"test-partitions\"", "3.0");
+        // The broker id and address are not known up front, so check the shape and the value.
+        assertMetricWithLabels(scraped, "kafka_broker_info", "address=\"", null);
+        assertMetricWithLabels(scraped, "kafka_topic_partitions", "topic=\"" + topic + "\"} ", "3.0");
         assertMetricWithLabels(scraped, "kafka_topic_partition_leader",
-                "partition=\"0\",topic=\"test-partitions\"");
+                "partition=\"0\",topic=\"" + topic + "\"} ", null);
         assertMetricWithLabels(scraped, "kafka_topic_partition_replicas",
-                "partition=\"1\",topic=\"test-partitions\"", "1.0");
+                "partition=\"1\",topic=\"" + topic + "\"} ", "1.0");
         assertMetricWithLabels(scraped, "kafka_topic_partition_in_sync_replica",
-                "partition=\"2\",topic=\"test-partitions\"", "1.0");
-    }
-
-    @Test
-    void producerOffsetsTracked() throws Exception {
-        String topic = "test-offsets";
-        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1)))
-                .all().get();
-
-        produce(topic, 10);
-        collector.collectInternal();
-
-        String scraped = scrape();
+                "partition=\"2\",topic=\"" + topic + "\"} ", "1.0");
         assertMetricWithLabels(scraped, "kafka_topic_partition_current_offset",
-                "partition=\"0\",topic=\"test-offsets\"", "10.0");
+                "partition=\"0\",topic=\"" + topic + "\"} ", "10.0");
         assertMetricWithLabels(scraped, "kafka_topic_partition_oldest_offset",
-                "partition=\"0\",topic=\"test-offsets\"", "0.0");
+                "partition=\"0\",topic=\"" + topic + "\"} ", "0.0");
     }
 
     @Test
@@ -118,19 +104,22 @@ class MetricsCollectorIT {
         admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1)))
                 .all().get();
 
-        produce(topic, 20);
-        consumeAndCommit(topic, group, 15);
+        produce(topic, 0, 20);
+        commit(topic, 0, group, 15);
         collector.collectInternal();
 
         String scraped = scrape();
         assertMetricWithLabels(scraped, "kafka_consumergroup_current_offset",
-                "consumergroup=\"test-lag-group\",partition=\"0\",topic=\"test-lag-topic\"", "15.0");
+                "consumergroup=\"test-lag-group\",partition=\"0\",topic=\"test-lag-topic\"} ", "15.0");
         assertMetricWithLabels(scraped, "kafka_consumergroup_lag",
-                "consumergroup=\"test-lag-group\",partition=\"0\",topic=\"test-lag-topic\"", "5.0");
+                "consumergroup=\"test-lag-group\",partition=\"0\",topic=\"test-lag-topic\"} ", "5.0");
         assertMetricWithLabels(scraped, "kafka_consumergroup_lag_sum",
-                "consumergroup=\"test-lag-group\",topic=\"test-lag-topic\"", "5.0");
+                "consumergroup=\"test-lag-group\",topic=\"test-lag-topic\"} ", "5.0");
         assertMetricWithLabels(scraped, "kafka_consumergroup_members",
-                "consumergroup=\"test-lag-group\"", "0.0");
+                "consumergroup=\"test-lag-group\"} ", "0.0");
+        // A group that only commits offsets, with no live member, is Empty
+        assertMetricWithLabels(scraped, "kafka_consumergroup_state",
+                "consumergroup=\"test-lag-group\",state=\"Empty\"} ", "1.0");
     }
 
     @Test
@@ -144,28 +133,28 @@ class MetricsCollectorIT {
         produce(topic, 1, 10);
 
         // Only commit on partition 0
-        consumeAndCommit(topic, group, 0, 5);
+        commit(topic, 0, group, 5);
 
         collector.collectInternal();
 
         String scraped = scrape();
         // Partition 0: committed=5, latest=10, lag=5
         assertMetricWithLabels(scraped, "kafka_consumergroup_lag",
-                "consumergroup=\"test-uncommitted-group\",partition=\"0\",topic=\"test-uncommitted\"", "5.0");
+                "consumergroup=\"test-uncommitted-group\",partition=\"0\",topic=\"test-uncommitted\"} ", "5.0");
         // lag_sum counts only partition 0: the -1 sentinel is deliberately not summed
         assertMetricWithLabels(scraped, "kafka_consumergroup_lag_sum",
-                "consumergroup=\"test-uncommitted-group\",topic=\"test-uncommitted\"", "5.0");
+                "consumergroup=\"test-uncommitted-group\",topic=\"test-uncommitted\"} ", "5.0");
 
         // Partition 1 has no commit, but the group does consume this topic, so it reports -1
         // rather than dropping the series. The broker never tells us about this partition:
         // it is reconstructed from the topic's partition count.
         assertMetricWithLabels(scraped, "kafka_consumergroup_current_offset",
-                "consumergroup=\"test-uncommitted-group\",partition=\"1\",topic=\"test-uncommitted\"", "-1.0");
+                "consumergroup=\"test-uncommitted-group\",partition=\"1\",topic=\"test-uncommitted\"} ", "-1.0");
         assertMetricWithLabels(scraped, "kafka_consumergroup_lag",
-                "consumergroup=\"test-uncommitted-group\",partition=\"1\",topic=\"test-uncommitted\"", "-1.0");
+                "consumergroup=\"test-uncommitted-group\",partition=\"1\",topic=\"test-uncommitted\"} ", "-1.0");
         // current_offset_sum excludes the -1, so it is partition 0's offset alone
         assertMetricWithLabels(scraped, "kafka_consumergroup_current_offset_sum",
-                "consumergroup=\"test-uncommitted-group\",topic=\"test-uncommitted\"", "5.0");
+                "consumergroup=\"test-uncommitted-group\",topic=\"test-uncommitted\"} ", "5.0");
     }
 
     @Test
@@ -176,9 +165,9 @@ class MetricsCollectorIT {
         admin.createTopics(List.of(
                 new NewTopic(consumed, 1, (short) 1),
                 new NewTopic(untouched, 1, (short) 1))).all().get();
-        produce(consumed, 5);
-        produce(untouched, 5);
-        consumeAndCommit(consumed, group, 2);
+        produce(consumed, 0, 5);
+        produce(untouched, 0, 5);
+        commit(consumed, 0, group, 2);
 
         collector.collectInternal();
 
@@ -186,7 +175,7 @@ class MetricsCollectorIT {
         assertTrue(scraped.contains("consumergroup=\"" + group + "\",partition=\"0\",topic=\"" + consumed + "\""),
                 "the consumed topic must be reported. Scrape was:\n" + scraped);
         assertFalse(scraped.contains("consumergroup=\"" + group + "\",partition=\"0\",topic=\"" + untouched + "\""),
-                "a topic the group has never committed to must produce no series at all. " + "Scrape was:\n" + scraped);
+                "a topic the group has never committed to must produce no series at all. Scrape was:\n" + scraped);
     }
 
     @Test
@@ -194,45 +183,60 @@ class MetricsCollectorIT {
         admin.createTopics(List.of(
                 new NewTopic("filter-keep", 1, (short) 1),
                 new NewTopic("filter-drop", 1, (short) 1),
-                new NewTopic("filter-other-app", 1, (short) 1))).all().get();
+                new NewTopic("filter-other-app", 1, (short) 1),
+                new NewTopic("decoy-topic", 1, (short) 1))).all().get();
 
-        Map<String, String> env = Map.of(
-                "SOVA_KAFKA_BOOTSTRAP_SERVERS", bootstrapServers,
-                "SOVA_TOPIC_REGEX", "filter-.*",
-                "SOVA_TOPIC_EXCLUDE_REGEX", "filter-drop|filter-other-.*");
-        MetricsRegistry filteredRegistry = new MetricsRegistry();
-        new MetricsCollector(admin, filteredRegistry, new SovaConfig(env::get)).collectInternal();
+        MetricsRegistry filtered = collectWith(Map.of(
+                "STRIMZI_TOPIC_REGEX", "filter-.*",
+                "STRIMZI_TOPIC_EXCLUDE_REGEX", "filter-drop|filter-other-.*"));
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrometheusTextFormatWriter.create().write(
-                out, filteredRegistry.prometheusRegistry().scrape(), EscapingScheme.DEFAULT);
-        String scraped = out.toString(StandardCharsets.UTF_8);
-
+        String scraped = TestSnapshots.scrape(filtered);
         assertTrue(scraped.contains("kafka_topic_partitions{topic=\"filter-keep\"}"),
                 "an included topic must be reported. Scrape was:\n" + scraped);
         assertFalse(scraped.contains("topic=\"filter-drop\""),
                 "an excluded topic must not be reported. Scrape was:\n" + scraped);
         assertFalse(scraped.contains("topic=\"filter-other-app\""),
                 "an excluded topic must not be reported. Scrape was:\n" + scraped);
-        assertFalse(scraped.contains("topic=\"test-"),
+        assertFalse(scraped.contains("topic=\"decoy-topic\""),
                 "a topic outside the include pattern must not be reported. Scrape was:\n" + scraped);
+    }
+
+    @Test
+    void groupIncludeAndExcludeRegexAreApplied() throws Exception {
+        String topic = "group-filter-topic";
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+        produce(topic, 0, 5);
+        commit(topic, 0, "grp-keep", 1);
+        commit(topic, 0, "grp-drop", 1);
+        commit(topic, 0, "decoy-group", 1);
+
+        MetricsRegistry filtered = collectWith(Map.of(
+                "STRIMZI_GROUP_REGEX", "grp-.*",
+                "STRIMZI_GROUP_EXCLUDE_REGEX", "grp-drop"));
+
+        String scraped = TestSnapshots.scrape(filtered);
+        assertTrue(scraped.contains("kafka_consumergroup_members{consumergroup=\"grp-keep\"}"),
+                "an included group must be reported. Scrape was:\n" + scraped);
+        assertFalse(scraped.contains("consumergroup=\"grp-drop\""),
+                "an excluded group must not be reported. Scrape was:\n" + scraped);
+        assertFalse(scraped.contains("consumergroup=\"decoy-group\""),
+                "a group outside the include pattern must not be reported. Scrape was:\n" + scraped);
     }
 
     // -- helpers --
 
-    private void produce(String topic, int count) throws ExecutionException, InterruptedException {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
-            for (int i = 0; i < count; i++) {
-                producer.send(new ProducerRecord<>(topic, "key-" + i, "val-" + i)).get();
-            }
-        }
+    /**
+     * Runs one collection cycle with extra filter variables and returns the registry it filled.
+     */
+    private static MetricsRegistry collectWith(Map<String, String> filters) throws Exception {
+        Map<String, String> env = new HashMap<>(filters);
+        env.put("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION", "bootstrap.servers=" + bootstrapServers);
+        MetricsRegistry filteredRegistry = new MetricsRegistry();
+        new MetricsCollector(admin, filteredRegistry, new SovaConfig(env::get)).collectInternal();
+        return filteredRegistry;
     }
 
-    private void produce(String topic, int partition, int count)
+    private static void produce(String topic, int partition, int count)
             throws ExecutionException, InterruptedException {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -245,17 +249,11 @@ class MetricsCollectorIT {
         }
     }
 
-    private void consumeAndCommit(String topic, String group, int commitOffset) {
-        TopicPartition tp = new TopicPartition(topic, 0);
-        commitOffset(group, tp, commitOffset);
-    }
-
-    private void consumeAndCommit(String topic, String group, int partition, int commitOffset) {
+    /**
+     * Commits an offset for a group without consuming anything or joining the group.
+     */
+    private static void commit(String topic, int partition, String group, int offset) {
         TopicPartition tp = new TopicPartition(topic, partition);
-        commitOffset(group, tp, commitOffset);
-    }
-
-    private void commitOffset(String group, TopicPartition tp, int offset) {
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, group);
@@ -268,42 +266,35 @@ class MetricsCollectorIT {
         }
     }
 
-    private String scrape() throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrometheusTextFormatWriter.create().write(
-                out, registry.prometheusRegistry().scrape(), EscapingScheme.DEFAULT);
-        return out.toString(StandardCharsets.UTF_8);
+    private static String scrape() throws IOException {
+        return TestSnapshots.scrape(registry);
     }
 
-    private void assertMetricValue(String scraped, String metric, String value) {
+    /**
+     * Asserts that an unlabelled metric has exactly the given value.
+     */
+    private static void assertMetricValue(String scraped, String metric, String value) {
+        assertMetricWithLabels(scraped, metric, null, value);
+    }
+
+    /**
+     * Asserts that a line exists for the metric whose labels start with {@code labels} and, when
+     * {@code value} is not null, whose value equals it exactly. Comparing the whole last token
+     * matters: {@code endsWith("5.0")} would also accept {@code 15.0} and {@code -5.0}.
+     *
+     * <p>End {@code labels} with the closing brace and a space to pin the full label set, so that
+     * {@code topic="a"} cannot match {@code topic="a-b"}; pass {@code null} for an unlabelled
+     * metric.
+     */
+    private static void assertMetricWithLabels(String scraped, String metric, String labels, String value) {
+        String prefix = labels == null ? metric + " " : metric + "{" + labels;
         for (String line : scraped.split("\n")) {
-            if (!line.startsWith("#") && line.startsWith(metric) && line.endsWith(value)) {
+            if (line.startsWith(prefix)
+                    && (value == null || line.substring(line.lastIndexOf(' ') + 1).equals(value))) {
                 return;
             }
         }
-        throw new AssertionError("Expected metric '" + metric + "' with value " + value
-                + "\n\nScraped output:\n" + scraped);
-    }
-
-    private void assertMetricWithLabels(String scraped, String metric, String labels, String value) {
-        String pattern = metric + "{" + labels;
-        for (String line : scraped.split("\n")) {
-            if (!line.startsWith("#") && line.contains(pattern) && line.endsWith(value)) {
-                return;
-            }
-        }
-        throw new AssertionError("Expected metric '" + metric + "{" + labels + "}' with value "
-                + value + "\n\nScraped output:\n" + scraped);
-    }
-
-    private void assertMetricWithLabels(String scraped, String metric, String labels) {
-        String pattern = metric + "{" + labels;
-        for (String line : scraped.split("\n")) {
-            if (!line.startsWith("#") && line.contains(pattern)) {
-                return;
-            }
-        }
-        throw new AssertionError("Expected metric '" + metric + "{" + labels + "}' to be present"
-                + "\n\nScraped output:\n" + scraped);
+        throw new AssertionError("Expected metric '" + prefix + "' with value "
+                + (value == null ? "<any>" : value) + "\n\nScraped output:\n" + scraped);
     }
 }

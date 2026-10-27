@@ -4,15 +4,13 @@
  */
 package io.strimzi.sova.metrics;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
-import io.prometheus.metrics.config.EscapingScheme;
-import io.prometheus.metrics.expositionformats.PrometheusTextFormatWriter;
 import io.strimzi.sova.metrics.MetricSnapshot.ConsumerGroupStateKey;
 import io.strimzi.sova.metrics.MetricSnapshot.ConsumerGroupTopicKey;
 import io.strimzi.sova.metrics.MetricSnapshot.ConsumerGroupTopicPartitionKey;
@@ -21,21 +19,22 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static io.strimzi.sova.metrics.TestSnapshots.scrape;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Verifies that all expected Prometheus metrics are registered and emitted by
- * {@link MetricsRegistry}.
+ * Verifies what {@link MetricsRegistry} emits for a scrape: the exact metric names, their label
+ * and value rendering, and the one-cycle-per-scrape guarantee.
  *
  * <p>Gauges with label names but no observed data points are not emitted by the Prometheus
- * Java client until at least one label-value combination is set. This test therefore calls
- * {@link MetricsRegistry#update(MetricSnapshot)} with a minimal snapshot to
- * populate every metric family before scraping.
+ * Java client until at least one label-value combination is set. These tests therefore call
+ * {@link MetricsRegistry#update(MetricSnapshot)} with a snapshot that populates the families
+ * they look at before scraping.
  */
 @SuppressWarnings("checkstyle:ClassDataAbstractionCoupling")
 class MetricsRegistryTest {
-
     private MetricsRegistry registry;
 
     @BeforeEach
@@ -61,53 +60,72 @@ class MetricsRegistryTest {
      */
     @Test
     void allMetricsRegistered() {
-        TopicPartition tp = new TopicPartition("t", 0);
-        ConsumerGroupTopicPartitionKey cgTpKey =
-                new ConsumerGroupTopicPartitionKey("g", "t", "0");
-        ConsumerGroupTopicKey cgTKey =
-                new ConsumerGroupTopicKey("g", "t");
-        ConsumerGroupStateKey cgStateKey =
-                new ConsumerGroupStateKey("g", "Stable");
-
-        MetricSnapshot snapshot = new MetricSnapshot(
-                1,
-                Map.of("0", "broker0:9092"),
-                Map.of("t", 1),
-                Map.of(tp, new PartitionMetrics(0, 1, 1, true, false)),
-                Map.of(tp, 100L),
-                Map.of(tp, 0L),
-                Map.of("g", 1),
-                Map.of(cgTpKey, 80L),
-                Map.of(cgTKey, 80L),
-                Map.of(cgTpKey, 20L),
-                Map.of(cgTKey, 20L),
-                Map.of(cgStateKey, true),
-                0L);
-
-        registry.update(snapshot);
+        registry.update(fullSnapshot());
 
         Set<String> actualNames = registry.prometheusRegistry().scrape().stream()
                 .map(s -> s.getMetadata().getPrometheusName())
                 .collect(Collectors.toSet());
 
-        assertRegistered(actualNames, "kafka_brokers");
-        assertRegistered(actualNames, "kafka_broker_info");
-        assertRegistered(actualNames, "kafka_topic_partitions");
-        assertRegistered(actualNames, "kafka_topic_partition_current_offset");
-        assertRegistered(actualNames, "kafka_topic_partition_oldest_offset");
-        assertRegistered(actualNames, "kafka_topic_partition_leader");
-        assertRegistered(actualNames, "kafka_topic_partition_replicas");
-        assertRegistered(actualNames, "kafka_topic_partition_in_sync_replica");
-        assertRegistered(actualNames, "kafka_topic_partition_leader_is_preferred");
-        assertRegistered(actualNames, "kafka_topic_partition_under_replicated_partition");
-        assertRegistered(actualNames, "kafka_consumergroup_members");
-        assertRegistered(actualNames, "kafka_consumergroup_current_offset");
-        assertRegistered(actualNames, "kafka_consumergroup_current_offset_sum");
-        assertRegistered(actualNames, "kafka_consumergroup_lag");
-        assertRegistered(actualNames, "kafka_consumergroup_lag_sum");
-        assertRegistered(actualNames, "kafka_consumergroup_state");
-        assertRegistered(actualNames, "sova_last_successful_collection_timestamp_seconds");
-        assertRegistered(actualNames, "sova_build");
+        for (String name : Set.of(
+                "kafka_brokers",
+                "kafka_broker_info",
+                "kafka_topic_partitions",
+                "kafka_topic_partition_current_offset",
+                "kafka_topic_partition_oldest_offset",
+                "kafka_topic_partition_leader",
+                "kafka_topic_partition_replicas",
+                "kafka_topic_partition_in_sync_replica",
+                "kafka_topic_partition_leader_is_preferred",
+                "kafka_topic_partition_under_replicated_partition",
+                "kafka_consumergroup_members",
+                "kafka_consumergroup_current_offset",
+                "kafka_consumergroup_current_offset_sum",
+                "kafka_consumergroup_lag",
+                "kafka_consumergroup_lag_sum",
+                "kafka_consumergroup_state",
+                "sova_last_successful_collection_timestamp_seconds",
+                "sova_build")) {
+            assertTrue(actualNames.contains(name),
+                    "Expected metric '" + name + "' not found among registered names: " + actualNames);
+        }
+    }
+
+    /**
+     * The labels and values of the families that are easy to get subtly wrong: the broker info
+     * labels come from both key and value of a map, the state metric is one series per
+     * {@code true} entry only, and the partition flags are rendered as 1/0.
+     *
+     * @throws IOException if the text writer fails
+     */
+    @Test
+    void rendersLabelsAndValuesOfBrokerInfoGroupStateAndPartitionFlags() throws IOException {
+        TopicPartition healthy = new TopicPartition("t", 0);
+        TopicPartition degraded = new TopicPartition("t", 1);
+        registry.update(TestSnapshots.builder()
+                .brokerAddresses(Map.of("0", "broker0:9092"))
+                .partitions(Map.of(
+                        healthy, new PartitionMetrics(0, 3, 3, true, false),
+                        degraded, new PartitionMetrics(-1, 3, 2, false, true)))
+                .states(Map.of(
+                        new ConsumerGroupStateKey("g", "Stable"), true,
+                        new ConsumerGroupStateKey("g", "Empty"), false))
+                .build());
+
+        String scraped = scrape(registry);
+
+        assertTrue(scraped.contains("kafka_broker_info{address=\"broker0:9092\",id=\"0\"} 1.0"),
+                "broker info must carry id and address, got:\n" + scraped);
+        assertTrue(scraped.contains("kafka_consumergroup_state{consumergroup=\"g\",state=\"Stable\"} 1.0"),
+                "a present state must be exported, got:\n" + scraped);
+        assertFalse(scraped.contains("state=\"Empty\""),
+                "a state flagged false must not be exported, got:\n" + scraped);
+        assertTrue(scraped.contains("kafka_topic_partition_leader{partition=\"1\",topic=\"t\"} -1.0"),
+                "a partition without a leader must read -1, got:\n" + scraped);
+        assertTrue(scraped.contains("kafka_topic_partition_leader_is_preferred{partition=\"0\",topic=\"t\"} 1.0"));
+        assertTrue(scraped.contains("kafka_topic_partition_leader_is_preferred{partition=\"1\",topic=\"t\"} 0.0"));
+        assertTrue(scraped.contains("kafka_topic_partition_under_replicated_partition{partition=\"0\",topic=\"t\"} 0.0"));
+        assertTrue(scraped.contains("kafka_topic_partition_under_replicated_partition{partition=\"1\",topic=\"t\"} 1.0"));
+        assertTrue(scraped.contains("kafka_topic_partition_in_sync_replica{partition=\"1\",topic=\"t\"} 2.0"));
     }
 
     /**
@@ -117,11 +135,11 @@ class MetricsRegistryTest {
      */
     @Test
     void exposesTheProcessAndJvmFamilies() throws IOException {
-        String scraped = scrape();
+        String scraped = scrape(registry);
 
-        assertPresent(scraped, "process_cpu_seconds_total");
-        assertPresent(scraped, "process_start_time_seconds");
-        assertPresent(scraped, "jvm_memory_used_bytes");
+        assertTrue(scraped.contains("process_cpu_seconds_total"));
+        assertTrue(scraped.contains("process_start_time_seconds"));
+        assertTrue(scraped.contains("jvm_memory_used_bytes"));
     }
 
     /**
@@ -133,63 +151,31 @@ class MetricsRegistryTest {
     void buildInfoLabelsAreExposed() throws IOException {
         MetricsRegistry custom = new MetricsRegistry(new BuildInfo("1.2.3", "abc1234", "release", "21.0.3"));
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrometheusTextFormatWriter.create().write(
-                out, custom.prometheusRegistry().scrape(), EscapingScheme.DEFAULT);
-        String scraped = out.toString(StandardCharsets.UTF_8);
+        String scraped = scrape(custom);
 
-        assertPresent(scraped, "version=\"1.2.3\"");
-        assertPresent(scraped, "revision=\"abc1234\"");
-        assertPresent(scraped, "branch=\"release\"");
-        assertPresent(scraped, "javaversion=\"21.0.3\"");
-    }
-
-    private void assertPresent(String output, String name) {
-        assertTrue(output.contains(name),
-                "Expected metric '" + name + "' not found in scrape output");
-    }
-
-    private void assertRegistered(Set<String> actualNames, String name) {
-        assertTrue(actualNames.contains(name),
-                "Expected metric '" + name + "' not found among registered names: " + actualNames);
+        assertTrue(scraped.contains("version=\"1.2.3\""));
+        assertTrue(scraped.contains("revision=\"abc1234\""));
+        assertTrue(scraped.contains("branch=\"release\""));
+        assertTrue(scraped.contains("java_info=\"21.0.3\""));
     }
 
     /**
-     * Builds a snapshot describing exactly one topic with one partition, so that two snapshots
-     * built from different topic names share no series at all.
+     * Before the first collection cycle the scrape must still be valid rather than throwing, which
+     * would turn every scrape into an HTTP 500, and the staleness timestamp must read 0, not the
+     * current time, so an alert can tell a never-collected exporter from a freshly started one.
      *
-     * @param topic topic name to appear in every topic-keyed family
-     * @return a snapshot with every topic family populated for that one topic
-     */
-    private static MetricSnapshot snapshotForTopic(String topic) {
-        TopicPartition tp = new TopicPartition(topic, 0);
-        return new MetricSnapshot(
-                1,
-                Map.of("0", "broker0:9092"),
-                Map.of(topic, 1),
-                Map.of(tp, new PartitionMetrics(0, 1, 1, true, false)),
-                Map.of(tp, 100L),
-                Map.of(tp, 0L),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                0L);
-    }
-
-    /**
-     * Scrapes this instance's registry into the Prometheus text exposition format.
-     *
-     * @return the scrape body
      * @throws IOException if the text writer fails
      */
-    private String scrape() throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PrometheusTextFormatWriter.create().write(
-                out, registry.prometheusRegistry().scrape(), EscapingScheme.DEFAULT);
-        return out.toString(StandardCharsets.UTF_8);
+    @Test
+    void servesAValidScrapeBeforeTheFirstCollectionCycle() throws IOException {
+        String scraped = scrape(registry);
+
+        assertTrue(scraped.contains("kafka_brokers 0.0"),
+                "broker count must read zero before the first cycle, got:\n" + scraped);
+        assertTrue(scraped.contains("sova_build_info"),
+                "build info must be exported before the first cycle, got:\n" + scraped);
+        assertTrue(scraped.contains("sova_last_successful_collection_timestamp_seconds 0.0"),
+                "a never-collected exporter must read 0, not the current time. Scrape was:\n" + scraped);
     }
 
     /**
@@ -205,58 +191,11 @@ class MetricsRegistryTest {
         registry.update(snapshotForTopic("gonetopic"));
         registry.update(snapshotForTopic("livetopic"));
 
-        String scraped = scrape();
+        String scraped = scrape(registry);
 
         assertTrue(scraped.contains("livetopic"), "the current topic must be exported");
         assertFalse(scraped.contains("gonetopic"),
                 "a topic absent from the latest cycle must not be exported, got:\n" + scraped);
-    }
-
-    /**
-     * Before the first collection cycle — and after every topic is deleted — the collector must
-     * still produce a valid scrape rather than throwing, which would turn every scrape into an
-     * HTTP 500.
-     *
-     * @throws IOException if the text writer fails
-     */
-    @Test
-    void servesAValidScrapeBeforeTheFirstCollectionCycle() throws IOException {
-        String scraped = scrape();
-
-        assertTrue(scraped.contains("kafka_brokers 0.0"),
-                "broker count must read zero before the first cycle, got:\n" + scraped);
-        assertTrue(scraped.contains("sova_build_info"),
-                "build info must be exported before the first cycle, got:\n" + scraped);
-    }
-
-    /**
-     * Builds a snapshot describing exactly one consumer group, so that two snapshots built from
-     * different group ids share no series at all.
-     *
-     * @param group consumer group id
-     * @return a snapshot with every consumer group family populated for that one group
-     */
-    private static MetricSnapshot snapshotForGroup(String group) {
-        ConsumerGroupTopicPartitionKey cgtp =
-                new ConsumerGroupTopicPartitionKey(group, "t", "0");
-        ConsumerGroupTopicKey cgt =
-                new ConsumerGroupTopicKey(group, "t");
-        ConsumerGroupStateKey state =
-                new ConsumerGroupStateKey(group, "Stable");
-        return new MetricSnapshot(
-                1,
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(),
-                Map.of(group, 1),
-                Map.of(cgtp, 80L),
-                Map.of(cgt, 80L),
-                Map.of(cgtp, 20L),
-                Map.of(cgt, 20L),
-                Map.of(state, true),
-                0L);
     }
 
     /**
@@ -270,7 +209,7 @@ class MetricsRegistryTest {
         registry.update(snapshotForGroup("gonegroup"));
         registry.update(snapshotForGroup("livegroup"));
 
-        String scraped = scrape();
+        String scraped = scrape(registry);
 
         assertTrue(scraped.contains("livegroup"), "the current group must be exported");
         assertFalse(scraped.contains("gonegroup"),
@@ -292,17 +231,15 @@ class MetricsRegistryTest {
                 new ConsumerGroupTopicPartitionKey("g", "t", "1");
         ConsumerGroupTopicKey cgt = new ConsumerGroupTopicKey("g", "t");
 
-        registry.update(new MetricSnapshot(
-                1, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-                Map.of("g", 1),
-                Map.of(committed, 80L, neverCommitted, -1L),
-                Map.of(cgt, 80L),
-                Map.of(committed, 20L),
-                Map.of(cgt, 20L),
-                Map.of(),
-                0L));
+        registry.update(TestSnapshots.builder()
+                .members(Map.of("g", 1))
+                .groupOffsets(Map.of(committed, 80L, neverCommitted, -1L))
+                .groupOffsetSums(Map.of(cgt, 80L))
+                .lags(Map.of(committed, 20L))
+                .lagSums(Map.of(cgt, 20L))
+                .build());
 
-        String scraped = scrape();
+        String scraped = scrape(registry);
 
         assertTrue(scraped.contains("kafka_consumergroup_current_offset_sum{consumergroup=\"g\",topic=\"t\"} 80.0"),
                 "the sum must be the collected 80, not 79 with the -1 folded in, got:\n" + scraped);
@@ -323,25 +260,157 @@ class MetricsRegistryTest {
     void escapesConsumerGroupIdsThatContainQuotesAndBackslashes() throws IOException {
         registry.update(snapshotForGroup("weird\"group\\id"));
 
-        String scraped = scrape();
+        String scraped = scrape(registry);
 
         assertTrue(scraped.contains("weird\\\"group\\\\id"),
                 "group id must be escaped in the exposition text, got:\n" + scraped);
     }
 
     /**
-     * A scrape that races startup — before any collection cycle has run — must read 0, not the
-     * current time. That way an alert can tell a never-collected exporter from a fresh one.
+     * A scrape must reflect exactly one collection cycle. {@code PrometheusRegistry.scrape()}
+     * holds no lock on this class, so serialising writers with {@code synchronized} never made
+     * readers safe: a scrape landing between two per-gauge mutations read some families from the
+     * new cycle and some from the old one, and a derived value such as lag briefly described a
+     * cluster state that never existed.
+     *
+     * @throws Exception if the updater thread cannot be joined
+     */
+    @Test
+    void neverServesAScrapeThatMixesTwoCollectionCycles() throws Exception {
+        AtomicBoolean stop = new AtomicBoolean();
+        Thread updater = Thread.ofVirtual().start(() -> {
+            int generation = 1;
+            while (!stop.get()) {
+                registry.update(snapshotForGeneration(generation));
+                generation = generation == 1 ? 2 : 1;
+            }
+        });
+
+        String mixed = null;
+        try {
+            for (int i = 0; i < 2_000 && mixed == null; i++) {
+                String scraped = scrape(registry);
+                boolean brokersFromGenerationOne = scraped.contains("kafka_brokers 1.0");
+                boolean partitionsFromGenerationOne =
+                        scraped.contains("kafka_topic_partitions{topic=\"t\"} 1.0");
+                if (brokersFromGenerationOne != partitionsFromGenerationOne) {
+                    mixed = scraped;
+                }
+            }
+        } finally {
+            stop.set(true);
+            updater.join();
+        }
+
+        assertNull(mixed, "scrape mixed two collection cycles:\n" + mixed);
+    }
+
+    /**
+     * Each scrape rebuilds every family from the snapshot, so scrape cost is proportional to the
+     * number of series. A large cluster must still scrape, and the last series must be present.
      *
      * @throws IOException if the text writer fails
      */
     @Test
-    void stalenessTimestampIsZeroBeforeFirstCollection() throws IOException {
-        // No update() call: this is what a scrape racing startup sees.
-        String scraped = scrape();
+    void scrapesALargeClusterWithoutFailing() throws IOException {
+        Map<TopicPartition, Long> offsets = new HashMap<>();
+        Map<String, Integer> partitionCounts = new HashMap<>();
+        for (int topic = 0; topic < 100; topic++) {
+            partitionCounts.put("topic-" + topic, 100);
+            for (int partition = 0; partition < 100; partition++) {
+                offsets.put(new TopicPartition("topic-" + topic, partition), 1L);
+            }
+        }
+        registry.update(TestSnapshots.builder()
+                .brokerCount(3)
+                .topicPartitionCounts(partitionCounts)
+                .currentOffsets(offsets)
+                .build());
 
-        assertTrue(scraped.contains("sova_last_successful_collection_timestamp_seconds 0.0"),
-                "a never-collected exporter must read 0, not the current time, so an alert can "
-                        + "tell it apart from a freshly started one. Scrape was:\n" + scraped);
+        String scraped = scrape(registry);
+
+        assertTrue(scraped.contains("kafka_topic_partition_current_offset{partition=\"99\",topic=\"topic-99\"} 1.0"),
+                "the last of 10,000 partition series must be exported");
+    }
+
+    /**
+     * @return a snapshot with at least one data point in every family
+     */
+    private static MetricSnapshot fullSnapshot() {
+        TopicPartition tp = new TopicPartition("t", 0);
+        ConsumerGroupTopicPartitionKey cgTpKey = new ConsumerGroupTopicPartitionKey("g", "t", "0");
+        ConsumerGroupTopicKey cgTKey = new ConsumerGroupTopicKey("g", "t");
+        return TestSnapshots.builder()
+                .brokerCount(1)
+                .brokerAddresses(Map.of("0", "broker0:9092"))
+                .topicPartitionCounts(Map.of("t", 1))
+                .partitions(Map.of(tp, new PartitionMetrics(0, 1, 1, true, false)))
+                .currentOffsets(Map.of(tp, 100L))
+                .oldestOffsets(Map.of(tp, 0L))
+                .members(Map.of("g", 1))
+                .groupOffsets(Map.of(cgTpKey, 80L))
+                .groupOffsetSums(Map.of(cgTKey, 80L))
+                .lags(Map.of(cgTpKey, 20L))
+                .lagSums(Map.of(cgTKey, 20L))
+                .states(Map.of(new ConsumerGroupStateKey("g", "Stable"), true))
+                .build();
+    }
+
+    /**
+     * Builds a snapshot describing exactly one topic with one partition, so that two snapshots
+     * built from different topic names share no series at all.
+     *
+     * @param topic topic name to appear in every topic-keyed family
+     * @return a snapshot with every topic family populated for that one topic
+     */
+    private static MetricSnapshot snapshotForTopic(String topic) {
+        TopicPartition tp = new TopicPartition(topic, 0);
+        return TestSnapshots.builder()
+                .brokerCount(1)
+                .brokerAddresses(Map.of("0", "broker0:9092"))
+                .topicPartitionCounts(Map.of(topic, 1))
+                .partitions(Map.of(tp, new PartitionMetrics(0, 1, 1, true, false)))
+                .currentOffsets(Map.of(tp, 100L))
+                .oldestOffsets(Map.of(tp, 0L))
+                .build();
+    }
+
+    /**
+     * Builds a snapshot describing exactly one consumer group, so that two snapshots built from
+     * different group ids share no series at all.
+     *
+     * @param group consumer group id
+     * @return a snapshot with every consumer group family populated for that one group
+     */
+    private static MetricSnapshot snapshotForGroup(String group) {
+        ConsumerGroupTopicPartitionKey cgtp = new ConsumerGroupTopicPartitionKey(group, "t", "0");
+        ConsumerGroupTopicKey cgt = new ConsumerGroupTopicKey(group, "t");
+        return TestSnapshots.builder()
+                .brokerCount(1)
+                .members(Map.of(group, 1))
+                .groupOffsets(Map.of(cgtp, 80L))
+                .groupOffsetSums(Map.of(cgt, 80L))
+                .lags(Map.of(cgtp, 20L))
+                .lagSums(Map.of(cgt, 20L))
+                .states(Map.of(new ConsumerGroupStateKey(group, "Stable"), true))
+                .build();
+    }
+
+    /**
+     * Builds a snapshot in which every family encodes the same generation number, so any scrape
+     * that mixes two cycles is detectable from the exposition text alone.
+     *
+     * @param generation the value written into every family
+     * @return a self-consistent snapshot
+     */
+    private static MetricSnapshot snapshotForGeneration(int generation) {
+        TopicPartition tp = new TopicPartition("t", 0);
+        return TestSnapshots.builder()
+                .brokerCount(generation)
+                .topicPartitionCounts(Map.of("t", generation))
+                .partitions(Map.of(tp, new PartitionMetrics(generation, generation, generation, true, false)))
+                .currentOffsets(Map.of(tp, (long) generation))
+                .oldestOffsets(Map.of(tp, (long) generation))
+                .build();
     }
 }

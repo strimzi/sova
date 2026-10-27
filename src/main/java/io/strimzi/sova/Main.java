@@ -36,8 +36,7 @@ import io.strimzi.sova.metrics.MetricsRegistry;
  * order, so no new scrape can arrive while collection is being torn down.
  */
 public class Main {
-
-    private static final Logger log = LoggerFactory.getLogger(Main.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(Main.class);
 
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
 
@@ -55,12 +54,12 @@ public class Main {
     public static void main(String[] args) throws IOException {
         BuildInfo buildInfo = BuildInfo.load();
         // Log details about Sova build info
-        log.info(buildInfo.toString());
+        LOGGER.info(buildInfo.toString());
 
         SovaConfig config = new SovaConfig();
         // Effective config for whoever debugs a pod. Names only: SovaConfig prints the keys of the
         // Kafka client properties, never their values, which can carry credentials.
-        log.info(config.toString());
+        LOGGER.info(config.toString());
 
         Admin admin = KafkaAdminClient.create(config);
         MetricsRegistry registry = new MetricsRegistry(buildInfo);
@@ -85,12 +84,12 @@ public class Main {
     }
 
     private static void shutdown(HttpServers servers, ScheduledExecutorService scheduler, Admin admin) {
-        log.info("Shutting down...");
+        LOGGER.info("Shutting down...");
         servers.close();
         scheduler.shutdownNow();
         try {
             if (!scheduler.awaitTermination(SHUTDOWN_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
-                log.warn("Collection scheduler did not terminate within {}", SHUTDOWN_TIMEOUT);
+                LOGGER.warn("Collection scheduler did not terminate within {}", SHUTDOWN_TIMEOUT);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -25,7 +25,6 @@ import io.strimzi.sova.metrics.collectors.MetricsCollector;
  * <p>Threading: stateless handler backed by a volatile read in {@link MetricsCollector#isHealthy()}.
  */
 public class ReadinessCheck implements HttpHandler {
-
     private static final String CONTENT_TYPE = "application/json";
     private static final byte[] BODY_UP = "{\"status\":\"UP\"}".getBytes(StandardCharsets.UTF_8);
     private static final byte[] BODY_DOWN = "{\"status\":\"DOWN\"}".getBytes(StandardCharsets.UTF_8);
@@ -49,7 +48,7 @@ public class ReadinessCheck implements HttpHandler {
      */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        try {
+        try (exchange) {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 return;
@@ -58,13 +57,12 @@ public class ReadinessCheck implements HttpHandler {
             boolean healthy = collector.isHealthy();
             byte[] body = healthy ? BODY_UP : BODY_DOWN;
 
-            exchange.getResponseHeaders().set("Content-Type", CONTENT_TYPE);
+            exchange.getResponseHeaders()
+                .set("Content-Type", CONTENT_TYPE);
             exchange.sendResponseHeaders(healthy ? 200 : 503, body.length);
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(body);
             }
-        } finally {
-            exchange.close();
         }
     }
 }

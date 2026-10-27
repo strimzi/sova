@@ -16,10 +16,11 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Collects broker-level metadata via {@code AdminClient.describeCluster()}.
+ * <p>
+ * Broker count and addresses are exposed as {@code kafka_brokers} and {@code kafka_broker_info} metrics.
  */
 final class BrokerCollector {
-
-    private static final Logger log = LoggerFactory.getLogger(BrokerCollector.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(BrokerCollector.class);
 
     private BrokerCollector() { }
 
@@ -45,7 +46,7 @@ final class BrokerCollector {
         for (Node node : nodes) {
             addresses.put(String.valueOf(node.id()), node.host() + ":" + node.port());
         }
-        log.debug("Discovered {} broker(s)", nodes.size());
+        LOGGER.debug("Discovered {} broker(s)", nodes.size());
         return new BrokerData(nodes.size(), addresses);
     }
 }

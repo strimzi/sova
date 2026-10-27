@@ -21,7 +21,6 @@ import org.apache.logging.log4j.core.config.Property;
  * appears.
  */
 final class CapturingAppender extends AbstractAppender {
-
     private final List<String> messages = new CopyOnWriteArrayList<>();
     private final Logger logger;
 

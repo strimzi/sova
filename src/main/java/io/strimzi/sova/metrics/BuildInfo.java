@@ -27,7 +27,6 @@ import org.slf4j.LoggerFactory;
  * @param javaVersion version of the running JVM
  */
 public record BuildInfo(String version, String revision, String branch, String javaVersion) {
-
     /** Value used for any field that cannot be determined. */
     static final String UNKNOWN = "unknown";
 

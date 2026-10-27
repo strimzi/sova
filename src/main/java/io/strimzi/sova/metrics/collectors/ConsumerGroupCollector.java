@@ -34,8 +34,7 @@ import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
  * Collects consumer group membership, state, committed offsets, and lag via {@code AdminClient}.
  */
 final class ConsumerGroupCollector {
-
-    private static final Logger log = LoggerFactory.getLogger(ConsumerGroupCollector.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(ConsumerGroupCollector.class);
 
     /** Sentinel value emitted when a group has not committed to a partition of a consumed topic. */
     private static final long NO_COMMITTED_OFFSET = -1L;
@@ -48,7 +47,7 @@ final class ConsumerGroupCollector {
      * <p>{@link #collect(Admin, SovaConfig)} fills only {@code members}, {@code states} and
      * {@code committedOffsets}, so that branch of a cycle needs no topic data and can run
      * concurrently with the topic branch.
-     * {@link #computeLag(ConsumerGroupData, SovaConfig, TopicData)} then fills the offset and lag
+     * {@link #computeLag(ConsumerGroupData, Predicate<String>, TopicData)} then fills the offset and lag
      * maps and drops {@code committedOffsets}.
      *
      * @param members           member counts per group
@@ -88,7 +87,7 @@ final class ConsumerGroupCollector {
         Collection<GroupListing> allGroups = result.valid().get();
         Collection<Throwable> errors = result.errors().get();
         if (!errors.isEmpty()) {
-            log.warn("Listing consumer groups failed on {} broker(s); groups they host are missing "
+            LOGGER.warn("Listing consumer groups failed on {} broker(s); groups they host are missing "
                     + "from this cycle. First failure: {}", errors.size(),
                     errors.iterator().next().toString());
         }
@@ -99,7 +98,7 @@ final class ConsumerGroupCollector {
                 groupIds.add(listing.groupId());
             }
         }
-        log.debug("Consumer groups: {} total, {} after filtering", allGroups.size(), groupIds.size());
+        LOGGER.debug("Consumer groups: {} total, {} after filtering", allGroups.size(), groupIds.size());
         return groupIds;
     }
 
@@ -170,8 +169,7 @@ final class ConsumerGroupCollector {
      * @param topicData   topic data from the same cycle, used for high-water marks
      * @return assembled consumer group data
      */
-    static ConsumerGroupData computeLag(ConsumerGroupData groups, Predicate<String> topicFilter,
-            TopicData topicData) {
+    static ConsumerGroupData computeLag(ConsumerGroupData groups, Predicate<String> topicFilter, TopicData topicData) {
         Map<ConsumerGroupTopicPartitionKey, Long> currentOffsets = new HashMap<>();
         Map<ConsumerGroupTopicKey, Long> currentOffsetSums = new HashMap<>();
         Map<ConsumerGroupTopicPartitionKey, Long> lags = new HashMap<>();
@@ -212,7 +210,7 @@ final class ConsumerGroupCollector {
             // spec that should not occur, but the admin client can produce it, so skip it rather
             // than record a phantom commit.
             if (e.getValue() == null) {
-                log.debug("Skipping null OffsetAndMetadata for group '{}' topic '{}' partition {}",
+                LOGGER.debug("Skipping null OffsetAndMetadata for group '{}' topic '{}' partition {}",
                         gid, topic, e.getKey().partition());
                 continue;
             }
@@ -230,7 +228,7 @@ final class ConsumerGroupCollector {
                 // The group commits to a topic we did not collect this cycle (e.g. deleted between
                 // listTopics and describeTopics), so we have no partition count and no high-water
                 // marks. Nothing useful to emit.
-                log.debug("Skipping group '{}' topic '{}': no partition count in this cycle's "
+                LOGGER.debug("Skipping group '{}' topic '{}': no partition count in this cycle's "
                         + "topic data (topic may have been deleted mid-cycle)", gid, topic);
                 continue;
             }

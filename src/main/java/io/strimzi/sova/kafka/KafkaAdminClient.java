@@ -18,15 +18,14 @@ import io.strimzi.sova.config.SovaConfig;
 /**
  * Factory that creates the {@link Admin} client used for all Kafka metadata queries.
  *
- * <p>Security (TLS, SASL) and any other client setting come from the optional
+ * <p>Bootstrap servers, security (TLS, SASL) and any other client setting come from the
  * {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} environment variable (Kafka client properties,
  * one {@code key=value} per line); its entries are passed to the client as they are.
  *
  * <p>Threading: the produced {@code Admin} instance is a thread-safe Kafka client.
  */
 public class KafkaAdminClient {
-
-    private static final Logger log = LoggerFactory.getLogger(KafkaAdminClient.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(KafkaAdminClient.class);
 
     /**
      * Per-call deadline for every AdminClient request.
@@ -47,8 +46,8 @@ public class KafkaAdminClient {
      */
     public static Admin create(SovaConfig config) {
         Properties props = buildProperties(config);
-        log.info("Creating Kafka AdminClient for bootstrap: {} (topic.regex={}, group.regex={}, collect.interval={}ms)",
-            config.getKafkaBootstrapServers(), config.getTopicPattern(),
+        LOGGER.info("Creating Kafka AdminClient for bootstrap: {} (topic.regex={}, group.regex={}, collect.interval={}ms)",
+            props.getProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG), config.getTopicPattern(),
             config.getGroupPattern(), config.getCollectIntervalMs());
         return Admin.create(props);
     }
@@ -56,20 +55,19 @@ public class KafkaAdminClient {
     /**
      * Assembles the Kafka client properties from the given config.
      *
-     * <p>The configured client properties are applied first, so the Sova-specific settings below
-     * always win over them.
+     * <p>Default settings are applied first, followed by the configured client properties, so
+     * user-specified settings in {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} can override defaults.
      *
      * @param config application configuration
      * @return client properties
      */
     static Properties buildProperties(SovaConfig config) {
         Properties props = new Properties();
-        props.putAll(config.getKafkaAdminClientConfiguration());
-        props.setProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, config.getKafkaBootstrapServers());
         // Halve the 60 s client default. A cycle makes several sequential calls, so this bounds a
         // call, not a cycle — the cycle is covered by the staleness window in MetricsCollector —
         // but it stops one unresponsive coordinator from stretching every cycle past the interval.
         props.setProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(API_TIMEOUT.toMillis()));
+        props.putAll(config.getKafkaAdminClientConfiguration());
 
         return props;
     }

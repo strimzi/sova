@@ -36,8 +36,7 @@ import io.strimzi.sova.metrics.collectors.MetricsCollector;
  * <p>Threading: both listeners use a virtual-thread-per-task executor.
  */
 public final class HttpServers implements AutoCloseable {
-
-    private static final Logger log = LoggerFactory.getLogger(HttpServers.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(HttpServers.class);
 
     private final HttpServer metricsServer;
     private final HttpServer managementServer;
@@ -45,7 +44,7 @@ public final class HttpServers implements AutoCloseable {
     private final ExecutorService managementExecutor;
 
     private HttpServers(HttpServer metricsServer, HttpServer managementServer,
-                         ExecutorService metricsExecutor, ExecutorService managementExecutor) {
+                        ExecutorService metricsExecutor, ExecutorService managementExecutor) {
         this.metricsServer = metricsServer;
         this.managementServer = managementServer;
         this.metricsExecutor = metricsExecutor;
@@ -74,14 +73,14 @@ public final class HttpServers implements AutoCloseable {
                 // Generic 500 body — never leak stack traces to scrape clients. Details go to
                 // Sova's own SLF4J logger rather than the handler's default JUL logger.
                 HttpErrorHandlingPolicy.builder()
-                    .errorReporter(e -> log.warn("Prometheus scrape failed", e))
+                    .errorReporter(e -> LOGGER.warn("Prometheus scrape failed", e))
                     .build()
             )
         );
         ExecutorService metricsExecutor = Executors.newVirtualThreadPerTaskExecutor();
         metrics.setExecutor(metricsExecutor);
         metrics.start();
-        log.info("Metrics HTTP server started on port {}", metrics.getAddress()
+        LOGGER.info("Metrics HTTP server started on port {}", metrics.getAddress()
             .getPort());
 
         try {
@@ -91,7 +90,7 @@ public final class HttpServers implements AutoCloseable {
             ExecutorService managementExecutor = Executors.newVirtualThreadPerTaskExecutor();
             management.setExecutor(managementExecutor);
             management.start();
-            log.info("Management HTTP server started on port {}", management.getAddress()
+            LOGGER.info("Management HTTP server started on port {}", management.getAddress()
                 .getPort());
 
             return new HttpServers(metrics, management, metricsExecutor, managementExecutor);

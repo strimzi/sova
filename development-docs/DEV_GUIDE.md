@@ -30,7 +30,7 @@ ITs — see "Running integration tests only" below.
 ```bash
 mvn clean package
 cd target && unzip sova-*.zip && cd sova-*/
-export SOVA_KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+export STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION='bootstrap.servers=localhost:9092'
 java -classpath "libs/*" io.strimzi.sova.Main
 ```
 

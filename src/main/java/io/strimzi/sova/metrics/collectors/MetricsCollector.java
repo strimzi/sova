@@ -36,8 +36,7 @@ import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
  * executor so the calling thread is never blocked long-term.
  */
 public class MetricsCollector {
-
-    private static final Logger log = LoggerFactory.getLogger(MetricsCollector.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(MetricsCollector.class);
 
     /**
      * How many collection intervals the served snapshot may age before it counts as stale.
@@ -96,16 +95,15 @@ public class MetricsCollector {
         } catch (InterruptedException e) {
             // Shutdown interrupts the scheduler thread mid-cycle. Restore the flag so the
             // executor can finish tearing down, and do not count this as a collection failure.
-            Thread.currentThread()
-                .interrupt();
-            log.debug("Collection cycle interrupted");
+            Thread.currentThread().interrupt();
+            LOGGER.debug("Collection cycle interrupted");
         } catch (Exception e) {
-            log.warn("Collection cycle failed, stale metrics keep being served", e);
+            LOGGER.warn("Collection cycle failed, stale metrics keep being served", e);
         } catch (Throwable t) {
             // An Error raised on the scheduler thread itself (a branch's Error arrives wrapped in
             // ExecutionException above). Log it and keep the schedule alive: the next cycle may
             // well succeed, and if it does not the snapshot ages out and readiness goes DOWN.
-            log.error("Collection cycle failed with an error, stale metrics keep being served", t);
+            LOGGER.error("Collection cycle failed with an error, stale metrics keep being served", t);
         }
     }
 
@@ -173,7 +171,7 @@ public class MetricsCollector {
         );
 
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-        log.debug("Collection cycle complete in {} ms: {} brokers, {} topics, {} partitions, {} groups",
+        LOGGER.debug("Collection cycle complete in {} ms: {} brokers, {} topics, {} partitions, {} groups",
             durationMs, brokerData.brokerCount(), topicData.topicPartitionCounts()
                 .size(),
             topicData.partitions()

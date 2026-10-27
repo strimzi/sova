@@ -24,13 +24,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * Unit tests for {@link KafkaAdminClient#buildProperties(SovaConfig)}.
  */
 class KafkaAdminClientTest {
-
     private Map<String, String> env;
+
+    private static final String CLIENT_CONFIG_ENV = "STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION";
 
     @BeforeEach
     void setUp() {
         env = new HashMap<>();
-        env.put("SOVA_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092");
+        env.put(CLIENT_CONFIG_ENV, "bootstrap.servers=kafka:9092\n");
     }
 
     private Properties build() {
@@ -38,7 +39,7 @@ class KafkaAdminClientTest {
     }
 
     @Test
-    void withoutClientConfigurationSetsOnlyBootstrapAndTimeout() {
+    void minimalClientConfigurationAddsOnlyTheTimeoutDefault() {
         Properties props = build();
 
         assertEquals("kafka:9092", props.getProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG));
@@ -49,7 +50,8 @@ class KafkaAdminClientTest {
 
     @Test
     void clientConfigurationEntriesAreMergedIntoTheClientProperties() {
-        env.put("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION", """
+        env.put(CLIENT_CONFIG_ENV, """
+                bootstrap.servers=kafka:9092
                 security.protocol=SASL_SSL
                 ssl.truststore.type=PEM
                 ssl.truststore.certificates=CA
@@ -68,15 +70,14 @@ class KafkaAdminClientTest {
     }
 
     @Test
-    void sovaSettingsWinOverTheClientConfiguration() {
-        env.put("STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION", """
-                bootstrap.servers=other:9092
-                default.api.timeout.ms=1
+    void defaultApiTimeoutCanBeOverriddenByClientConfiguration() {
+        env.put(CLIENT_CONFIG_ENV, """
+                bootstrap.servers=kafka:9092
+                default.api.timeout.ms=60000
                 """);
 
         Properties props = build();
 
-        assertEquals("kafka:9092", props.getProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG));
-        assertEquals("30000", props.getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
+        assertEquals("60000", props.getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
     }
 }

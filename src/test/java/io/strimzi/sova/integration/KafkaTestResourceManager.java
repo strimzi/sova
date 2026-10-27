@@ -12,19 +12,18 @@ import io.strimzi.test.container.StrimziKafkaCluster;
  * Manages a Strimzi embedded Kafka cluster for integration tests.
  */
 public class KafkaTestResourceManager {
-
-    // Static because the sole caller (MetricsCollectorIT) reads it as
-    // KafkaTestResourceManager.getBootstrapServers() right after start(), with no instance in
-    // scope at that call site. Delegates straight to the cluster instead of caching a second,
-    // redundant copy of the address in its own field.
-    private static volatile StrimziKafkaCluster kafka;
+    // Per instance, not static: two integration tests each manage their own cluster, and a shared
+    // static field would have one test's stop() tear down the other's broker as soon as the two
+    // ran concurrently. Delegates straight to the cluster instead of caching a second, redundant
+    // copy of the address in its own field.
+    private volatile StrimziKafkaCluster kafka;
 
     /**
      * Returns the bootstrap server address reachable from the host (after {@link #start()}).
      *
      * @return Kafka bootstrap server address
      */
-    public static String getBootstrapServers() {
+    public String getBootstrapServers() {
         return kafka.getBootstrapServers();
     }
 

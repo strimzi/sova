@@ -19,7 +19,6 @@ package io.strimzi.sova.metrics.collectors;
  * the only readiness mechanism this codebase has (see invariant 9 in {@code AGENTS.md}).
  */
 public class CollectionFailedException extends Exception {
-
     private static final long serialVersionUID = 1L;
 
     /**

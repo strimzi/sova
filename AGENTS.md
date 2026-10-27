@@ -3,32 +3,31 @@
 ## Project overview
 
 Sova is a **Kafka consumer group metrics exporter for Prometheus**, written in pure Java 21.
-It is a **standalone library project** — it produces only a ZIP artifact.
-Docker images are built and pushed in the `strimzi-kafka-operator` repository.
+It is a **standalone project** — it produces only a ZIP artifact.
+It does not build container images.
 
 **Hard constraints (never violate):**
 - Metric names are a fixed contract shared with Prometheus dashboards and alerts. **Never rename a metric.**
-- Kafka client security (TLS, SASL) is configured only through `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`. Do not reintroduce `SOVA_TLS_*` / `SOVA_SASL_*` environment variables.
+- Kafka client settings, including security (TLS, SASL), are configured only through `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`.
 - Values of `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` can be credentials: never log them or put them in an exception message — keys only.
-- ZooKeeper support is intentionally absent; Kafka 4.x is KRaft-only.
 - The endpoints are served via JDK built-in HTTP servers on two ports (metrics port 9404, management port 8080).
 
 ---
 
-## Architecture — one paragraph per class
+## Architecture
 
 **`Main`** — Application entry point.
 Wires together `SovaConfig`, `Admin`, `MetricsRegistry`, `MetricsCollector`, schedules background metrics collection, and starts the two listeners via `HttpServers` (metrics port on 9404, management port on 8080).
 Registers a shutdown hook that stops the listeners, the scheduler, and the `Admin` client.
 
 **`config/SovaConfig`** — Class holding all configuration options read from environment variables.
-Validates and compiles all regexes and numeric values at construction time so a malformed environment variable fails at startup with a message naming the variable.
+Validates and compiles all regexes, numeric values, and the Kafka client properties at construction time so a malformed or missing environment variable (including a missing `bootstrap.servers`) fails at startup with a message naming the variable.
 The public `SovaConfig(UnaryOperator<String> env)` constructor takes the environment lookup so tests can inject an environment; the no-argument constructor passes `System::getenv`.
 Effectively immutable after creation; safe to read from any thread.
 
 **`kafka/KafkaAdminClient`** — Factory that creates and configures the `Admin` client.
-Copies the Kafka client properties from `SovaConfig.getKafkaAdminClientConfiguration()` (TLS, SASL and any other client setting) into the `Properties` verbatim, then sets `bootstrap.servers` from `SOVA_KAFKA_BOOTSTRAP_SERVERS` and the API timeout on top, so those two always win over the variable.
-There is no Sova-side security logic: the operator (or a standalone user) decides the mechanism in the variable.
+Applies the default API timeout, then merges the Kafka client properties from `SovaConfig.getKafkaAdminClientConfiguration()` (`bootstrap.servers`, TLS, SASL and any other client setting) over it, so the variable can override the default.
+There is no Sova-side security logic: whoever sets the variable decides the mechanism.
 
 **`metrics/MetricsRegistry`** — Holds the most recently collected `MetricSnapshot` in a `volatile` field and registers a single `MultiCollector`, plus the JVM/process instrumentation, with a `PrometheusRegistry` it owns (deliberately not `defaultRegistry` — see invariant 8).
 `update(MetricSnapshot)` is one reference swap; every scrape reads that reference once and builds all metric families from it via `MetricsSnapshotRenderer`.
@@ -47,7 +46,7 @@ There is no resource filtering.
 `MetricsRegistry` has a public constructor taking a `BuildInfo` so `Main` and tests can inject one.
 
 **`metrics/collectors/MetricsCollector`** — Class scheduled periodically on a virtual thread.
-Orchestrates one collection cycle by delegating to `BrokerCollector`, `TopicCollector`, and `ConsumerGroupCollector`, then assembles their results into a `MetricSnapshot` and calls `registry.update(snapshot)`.
+Orchestrates one collection cycle by running `BrokerCollector`, `TopicCollector`, and `ConsumerGroupCollector` concurrently on virtual threads, then computes lag from their results, assembles a `MetricSnapshot` and calls `registry.update(snapshot)`.
 `collect()` never throws — a scheduled task that throws is cancelled silently and never runs again, which would freeze the pod without ever failing liveness.
 Failures are swallowed by level: `InterruptedException` restores the interrupt flag and logs DEBUG (shutdown, not a failure), `Exception` logs WARN, `Throwable` logs ERROR.
 None of them update the registry, so stale metrics continue to be served.
@@ -62,11 +61,13 @@ Uses per-element futures so a single deleted topic does not abort the whole cycl
 Returns a `TopicData` record.
 
 **`metrics/collectors/ConsumerGroupCollector`** — Stateless collector.
-Calls `listGroups()` to list and filter consumer groups, `describeConsumerGroups()` for membership/state, and `listConsumerGroupOffsets()` for committed offsets, computing lag against the `TopicData` passed in.
+`collect()` calls `listGroups()` to list and filter consumer groups, `describeConsumerGroups()` for membership/state, and `listConsumerGroupOffsets()` for committed offsets; it needs no topic data, so it runs concurrently with `TopicCollector`.
+`computeLag()` is a separate pure step, run by `MetricsCollector` once both branches are in: it computes offsets and lag against the `TopicData`.
 Uses per-element futures so a single deleted group does not abort the whole cycle.
 Returns a `ConsumerGroupData` record.
 
 **`metrics/collectors/CollectorUtils`** — Stateless helpers shared by all three collectors: `matches(value, include, exclude)` applies the include/exclude pattern pair, and `resolveAll(futures, kind)` resolves a map of per-element `KafkaFuture` values, dropping failures individually instead of failing the whole batch.
+If every element of a non-empty batch fails, `resolveAll` throws `CollectionFailedException` instead, so a total failure (for example a revoked ACL) is not published as an empty successful cycle.
 
 **`http/HttpServers`** — Owns both JDK `HttpServer` listeners: applies the JDK resource limits the platform leaves unset, registers the contexts, starts them on virtual-thread executors, and stops them on close.
 `/metrics` is served by Prometheus' own `MetricsHandler`; `/healthy` and `/ready` by Sova's handlers.
@@ -144,32 +145,28 @@ mvn test -Dtest=MetricsRegistryTest
 
 ## What to never do
 
-- **Never add ZooKeeper** — Kafka 4.x is KRaft-only.
 - **Never rename a metric** — breaking change.
 - **Never start a separate Prometheus HTTP server daemon (`HTTPServer`)** — mount `MetricsHandler` on our own JDK `HttpServer` instead.
 - **Never name every partition explicitly in a `ListConsumerGroupOffsetsSpec`** — use the default (no partition list) and synthesise -1 locally from the partition count.
 
 ---
 
-## Operator compatibility — env vars and mount paths
+## Environment variables
 
-The Strimzi operator injects these environment variables (names must never change):
+Sova is configured only through environment variables.
 
-| Variable                                 | Purpose                                                                 |
-|------------------------------------------|-------------------------------------------------------------------------|
-| `SOVA_KAFKA_BOOTSTRAP_SERVERS`           | Bootstrap servers                                                       |
-| `SOVA_GROUP_REGEX`                       | Consumer group include pattern (always set)                             |
-| `SOVA_GROUP_EXCLUDE_REGEX`               | Consumer group exclude pattern (only set when configured)               |
-| `SOVA_TOPIC_REGEX`                       | Topic include pattern (always set)                                      |
-| `SOVA_TOPIC_EXCLUDE_REGEX`               | Topic exclude pattern (only set when configured)                        |
-| `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | Kafka client properties, one `key=value` per line, holding TLS, SASL and other client config (same name and format as the User Operator variable); no Sova default |
-| `SOVA_METRICS_PORT`                      | Metrics port (default 9404 — matches `MetricsModel.METRICS_PORT`)       |
-| `SOVA_MANAGEMENT_PORT`                   | Management port (default 8080)                                          |
+| Variable                                   | Purpose                                                                                                                         |
+|--------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| `STRIMZI_GROUP_REGEX`                      | Consumer group include pattern (default `.*`)                                                                                   |
+| `STRIMZI_GROUP_EXCLUDE_REGEX`              | Consumer group exclude pattern (optional)                                                                                       |
+| `STRIMZI_TOPIC_REGEX`                      | Topic include pattern (default `.*`)                                                                                            |
+| `STRIMZI_TOPIC_EXCLUDE_REGEX`              | Topic exclude pattern (optional)                                                                                                |
+| `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | Kafka client properties, one `key=value` per line, holding `bootstrap.servers`, TLS, SASL and other client config; required, must contain `bootstrap.servers` |
+| `STRIMZI_METRICS_PORT`                     | Metrics port (default 9404)                                                                                                     |
+| `STRIMZI_MANAGEMENT_PORT`                  | Management port (default 8080)                                                                                                 |
 
-The full list the operator sets lives in `cluster-operator/src/main/java/io/strimzi/operator/cluster/model/Sova.java`.
-`SOVA_COLLECT_INTERVAL_MS` is read by `SovaConfig` but is **not** injected by the operator.
-Sova has no `SOVA_TLS_*` or `SOVA_SASL_*` variables: the operator generates the properties from the cluster's security context, puts them in `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`, and Sova merges them into the `Admin` client configuration.
-Secrets are referenced through the `${strimzisecrets:...}` config provider, never inlined.
+`STRIMZI_COLLECT_INTERVAL_MS` (default 30000) is also read by `SovaConfig`.
+`STRIMZI_LOG_LEVEL` and `STRIMZI_AC_LOG_LEVEL` are read by `log4j2.properties`.
 
 ---
 
@@ -185,7 +182,6 @@ Secrets are referenced through the `${strimzisecrets:...}` config provider, neve
 - No star imports (`AvoidStarImport` rule).
 - No `toLowerCase()`/`toUpperCase()` without `Locale` (use `Locale.ENGLISH`).
 - DCO sign-off is required on every commit: `git commit -s`.
-- `kafka-clients` version must be kept in sync with `strimzi-kafka-operator/pom.xml`.
 
 ---
 
