@@ -47,3 +47,11 @@ jobs:
           # thing that ever exercises Sova against a real Kafka never runs. Docker is available
           # on ubuntu-latest, which is all strimzi-test-container needs.
           MVN_ARGS: '-B -Pfailsafe'
+
+      - name: Upload test coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ./**/target/site/jacoco/jacoco.xml
+          flags: unittests,integrationtests
+          name: codecov-integration
+          fail_ci_if_error: false

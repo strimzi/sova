@@ -34,6 +34,7 @@
     <surefire-plugin.version>3.5.2</surefire-plugin.version>
     <assembly-plugin.version>3.7.1</assembly-plugin.version>
     <git-commit-id-plugin.version>9.0.1</git-commit-id-plugin.version>
+    <jacoco-plugin.version>0.8.16</jacoco-plugin.version>
 
     <!-- Set -Dskip.surefire=true to skip unit tests while still running failsafe (-Pfailsafe) -->
     <skip.surefire>false</skip.surefire>
@@ -246,6 +247,29 @@
             <exclude>**/*IT.java</exclude>
           </excludes>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco-plugin.version}</version>
+        <executions>
+          <execution>
+            <!-- One agent (the argLine property) is shared by surefire and failsafe, and both append to
+                 the same target/jacoco.exec, so unit and integration coverage land in a single report. -->
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- After failsafe's integration-test goal, so the report includes the *IT tests when run with -Pfailsafe -->
+            <id>report</id>
+            <phase>post-integration-test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
