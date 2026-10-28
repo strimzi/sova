@@ -1,0 +1,323 @@
+<?xml version="1.0"?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.strimzi</groupId>
+  <artifactId>sova</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+
+  <licenses>
+    <license>
+      <name>The Apache License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+
+  <name>Sova</name>
+  <description>Kafka consumer group metrics exporter for Prometheus.</description>
+  <url>https://github.com/strimzi/sova/</url>
+
+  <scm>
+    <connection>scm:git:git://github.com/strimzi/sova.git</connection>
+    <developerConnection>scm:git:ssh://github.com:strimzi/sova.git</developerConnection>
+    <url>https://github.com/strimzi/sova</url>
+  </scm>
+
+  <properties>
+    <!-- Maven plugins -->
+    <compiler-plugin.version>3.10.1</compiler-plugin.version>
+    <maven.checkstyle.version>3.2.0</maven.checkstyle.version>
+    <checkstyle.version>10.18.1</checkstyle.version>
+    <maven.spotbugs.version>4.10.5.0</maven.spotbugs.version>
+    <spotbugs.version>4.10.5</spotbugs.version>
+    <surefire-plugin.version>3.5.2</surefire-plugin.version>
+    <assembly-plugin.version>3.7.1</assembly-plugin.version>
+    <git-commit-id-plugin.version>9.0.1</git-commit-id-plugin.version>
+    <jacoco-plugin.version>0.8.16</jacoco-plugin.version>
+
+    <!-- Set -Dskip.surefire=true to skip unit tests while still running failsafe (-Pfailsafe) -->
+    <skip.surefire>false</skip.surefire>
+
+    <!-- Project options -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- Kafka -->
+    <kafka.version>4.4.0</kafka.version>
+
+    <!-- Prometheus — 1.9.0 or later required: HttpErrorHandlingPolicy (added in 1.9.0) keeps
+         scrape exception stack traces out of HTTP responses. -->
+    <prometheus.version>1.9.0</prometheus.version>
+
+    <!-- Logging -->
+    <slf4j.version>2.0.17</slf4j.version>
+    <log4j2.version>2.25.5</log4j2.version>
+
+    <!-- JUnit -->
+    <junit.version>6.1.3</junit.version>
+
+    <!-- Strimzi test container -->
+    <strimzi.test.container.version>0.117.0</strimzi.test.container.version>
+
+    <!-- Strimzi OAuth -->
+    <strimzi-oauth.version>0.18.0</strimzi-oauth.version>
+  </properties>
+
+  <dependencies>
+    <!-- Kafka client — kept in sync with strimzi-kafka-operator/pom.xml -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>${kafka.version}</version>
+    </dependency>
+
+    <!-- Strimzi OAuth client — provides JaasClientOauthLoginCallbackHandler loaded by Kafka SASL machinery -->
+    <dependency>
+      <groupId>io.strimzi</groupId>
+      <artifactId>kafka-oauth-client</artifactId>
+      <version>${strimzi-oauth.version}</version>
+    </dependency>
+
+    <!-- Prometheus metrics (registry + official /metrics HttpHandler).
+         We mount MetricsHandler on our own JDK HttpServer — never HTTPServer.builder(). -->
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-core</artifactId>
+      <version>${prometheus.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-exporter-httpserver</artifactId>
+      <version>${prometheus.version}</version>
+    </dependency>
+    <!-- process_* and jvm_* families -->
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-instrumentation-jvm</artifactId>
+      <version>${prometheus.version}</version>
+    </dependency>
+
+    <!-- Logging -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-slf4j2-impl</artifactId>
+      <version>${log4j2.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>${log4j2.version}</version>
+    </dependency>
+
+    <!-- Test dependencies -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.strimzi</groupId>
+      <artifactId>strimzi-test-container</artifactId>
+      <version>${strimzi.test.container.version}</version>
+      <scope>test</scope>
+      <!-- Jackson is a genuine runtime dependency (kafka-oauth-common's JSONUtil uses
+           ObjectMapper), so it ships in the dist ZIP. But this test-only dependency carries an
+           older Jackson that wins Maven's nearest-wins resolution and downgrades the runtime set
+           to an incoherent mix (databind 2.19.0 + core 2.21.1 + annotations 2.20). Excluding it
+           here lets kafka-oauth-common's own aligned versions through.
+           Guarded by JacksonAlignmentTest. -->
+      <exclusions>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.core</groupId>
+          <artifactId>jackson-databind</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.core</groupId>
+          <artifactId>jackson-core</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.core</groupId>
+          <artifactId>jackson-annotations</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${maven.checkstyle.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>validate</id>
+            <phase>validate</phase>
+            <configuration>
+              <configLocation>.checkstyle/checkstyle.xml</configLocation>
+              <suppressionsLocation>.checkstyle/suppressions.xml</suppressionsLocation>
+              <includeTestSourceDirectory>true</includeTestSourceDirectory>
+              <inputEncoding>UTF-8</inputEncoding>
+              <consoleOutput>true</consoleOutput>
+              <failsOnError>true</failsOnError>
+              <propertyExpansion>checkstyle.suppressions.file=.checkstyle/suppressions.xml</propertyExpansion>
+            </configuration>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${maven.spotbugs.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.github.spotbugs</groupId>
+            <artifactId>spotbugs</artifactId>
+            <version>${spotbugs.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <effort>Max</effort>
+          <!-- Reports all bugs (other values are medium and max) -->
+          <threshold>Low</threshold>
+          <!-- Produces XML report -->
+          <xmlOutput>true</xmlOutput>
+          <!-- Configures the directory in which the XML report is created -->
+          <spotbugsXmlOutputDirectory>${project.build.directory}/spotbugs</spotbugsXmlOutputDirectory>
+          <!-- Configures the file for excluding warnings -->
+          <excludeFilterFile>${project.basedir}/.spotbugs/spotbugs-exclude.xml</excludeFilterFile>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>io.github.git-commit-id</groupId>
+        <artifactId>git-commit-id-maven-plugin</artifactId>
+        <version>${git-commit-id-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>get-git-info</id>
+            <goals>
+              <goal>revision</goal>
+            </goals>
+            <phase>initialize</phase>
+            <configuration>
+              <!-- Writes target/classes/git.properties, read by BuildInfo. Without a .git
+                   directory the git.branch and git.commit.id.abbrev keys are simply absent
+                   and BuildInfo reports "unknown" for them. -->
+              <generateGitPropertiesFile>true</generateGitPropertiesFile>
+              <includeOnlyProperties>
+                <includeOnlyProperty>^git\.branch$</includeOnlyProperty>
+                <includeOnlyProperty>^git\.commit\.id\.abbrev$</includeOnlyProperty>
+                <includeOnlyProperty>^git\.build\.version$</includeOnlyProperty>
+              </includeOnlyProperties>
+              <failOnNoGitDirectory>false</failOnNoGitDirectory>
+              <abbrevLength>7</abbrevLength>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${compiler-plugin.version}</version>
+      </plugin>
+      <plugin>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${surefire-plugin.version}</version>
+        <configuration>
+          <skip>${skip.surefire}</skip>
+          <excludes>
+            <exclude>**/*IT.java</exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco-plugin.version}</version>
+        <executions>
+          <execution>
+            <!-- One agent (the argLine property) is shared by surefire and failsafe, and both append to
+                 the same target/jacoco.exec, so unit and integration coverage land in a single report. -->
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- After failsafe's integration-test goal, so the report includes the *IT tests when run with -Pfailsafe -->
+            <id>report</id>
+            <phase>post-integration-test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>${assembly-plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+            <configuration>
+              <!-- Produces sova-<version>-dist.zip, the asset attached to the GitHub release -->
+              <tarLongFileMode>posix</tarLongFileMode>
+              <descriptors>
+                <descriptor>src/assembly/dist.xml</descriptor>
+              </descriptors>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>failsafe</id>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-failsafe-plugin</artifactId>
+            <version>${surefire-plugin.version}</version>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>integration-test</goal>
+                  <goal>verify</goal>
+                </goals>
+                <configuration>
+                  <includes>
+                    <include>**/*IT.java</include>
+                  </includes>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
