@@ -63,7 +63,7 @@
     <strimzi.test.container.version>0.117.0</strimzi.test.container.version>
 
     <!-- Strimzi OAuth -->
-    <strimzi-oauth.version>0.18.0</strimzi-oauth.version>
+    <strimzi-oauth.version>0.18.1</strimzi-oauth.version>
   </properties>
 
   <dependencies>
