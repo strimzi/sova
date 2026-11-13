@@ -43,6 +43,18 @@ ssl.truststore.certificates=${strimzisecrets:my-ns/my-cluster-cluster-ca-cert:ca
 
 A value that is not valid properties syntax fails Sova at startup.
 
+The `${strimzisecrets:...}` placeholders in the examples are resolved by the [Strimzi Kubernetes config provider](https://github.com/strimzi/kafka-kubernetes-config-provider), which is not part of the Sova ZIP.
+To use them, put `io.strimzi:kafka-kubernetes-config-provider` on the classpath and add these entries to the configuration:
+
+```properties
+config.providers=strimzisecrets
+config.providers.strimzisecrets.class=io.strimzi.kafka.KubernetesSecretConfigProvider
+```
+
+Outside Kubernetes, point `ssl.truststore.location` (and `ssl.keystore.location` for mutual TLS) at files instead.
+The provider reads the Secrets through the Kubernetes API, so the service account Sova runs as needs RBAC permission to `get` each referenced Secret.
+When Sova is deployed by the Strimzi Cluster Operator, all of this is set up for you.
+
 > **Note:** 
 > At startup, Sova logs only the keys of this variable, never the values to keep credentials out of the log.
 
@@ -81,6 +93,8 @@ The `process_*` and `jvm_*` families are exported too.
 - **Lag is never clamped and can be negative.** A committed offset ahead of the high-water mark is a real anomaly worth seeing, not a glitch, so it is reported as-is. Because the broker, topic, and consumer-group data is collected concurrently within a cycle, a busy partition can also show a small transient negative lag that means nothing — do not alert on `lag < 0` without a `for:` duration.
 - **The `_sum` metrics are not the sum of the visible per-partition series.** Uncommitted partitions (the `-1` ones above) are excluded from both `kafka_consumergroup_lag_sum` and `kafka_consumergroup_current_offset_sum`, since folding a `-1` into a sum only drags it down for no useful meaning. A panel showing per-partition series next to the `_sum` will not reconcile — this is deliberate, not a bug.
 - **`kafka_consumergroup_lag_sum` can be absent rather than `0`** if offset fetching fails for a whole topic during a cycle. Prefer `absent_over_time(...[5m])` over a bare `absent()` so a single bad collection cycle does not page on its own.
+- **Internal topics are not reported.** `__consumer_offsets` and `__transaction_state` have no `kafka_topic_*` series, unlike in Kafka Exporter.
+- **Only consumer groups are reported**, both classic and KIP-848 (`group.protocol=consumer`) ones. Kafka Connect worker groups, share groups and KIP-1071 streams-protocol groups have no `kafka_consumergroup_*` series. Sink connectors and Kafka Streams applications on the classic protocol use ordinary consumer groups, so their lag is reported.
 - **`sova_last_successful_collection_timestamp_seconds` is the staleness signal**, reading `0` before the first successful cycle. `time() - sova_last_successful_collection_timestamp_seconds` is the "is this exporter actually working" panel.
 
 ---

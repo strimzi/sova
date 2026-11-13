@@ -164,9 +164,9 @@ Sova is configured only through environment variables.
 | `STRIMZI_TOPIC_EXCLUDE_REGEX`              | Topic exclude pattern (optional)                                                                                                |
 | `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | Kafka client properties, one `key=value` per line, holding `bootstrap.servers`, TLS, SASL and other client config; required, must contain `bootstrap.servers` |
 | `STRIMZI_METRICS_PORT`                     | Metrics port (default 9404)                                                                                                     |
-| `STRIMZI_MANAGEMENT_PORT`                  | Management port (default 8080)                                                                                                 |
+| `STRIMZI_MANAGEMENT_PORT`                  | Management port (default 8080)                                                                                                  |
+| `STRIMZI_COLLECT_INTERVAL_MS`              | Collection interval in milliseconds (default 30000)                                                                             |
 
-`STRIMZI_COLLECT_INTERVAL_MS` (default 30000) is also read by `SovaConfig`.
 `STRIMZI_LOG_LEVEL` and `STRIMZI_AC_LOG_LEVEL` are read by `log4j2.properties`.
 
 ---
