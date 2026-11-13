@@ -5,6 +5,7 @@
 package io.strimzi.sova.metrics.collectors;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import java.util.concurrent.ExecutionException;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.GroupProtocol;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -247,6 +249,77 @@ class MetricsCollectorIT {
                 producer.send(new ProducerRecord<>(topic, partition, "key-" + i, "val-" + i)).get();
             }
         }
+    }
+
+    /**
+     * The registry is replaced wholesale every cycle, so a topic deleted between two cycles must
+     * be gone from the second scrape rather than linger with its last values.
+     */
+    @Test
+    void deletedTopicDisappearsOnTheNextCycle() throws Exception {
+        String topic = "test-deleted-topic";
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+        collector.collectInternal();
+        assertMetricWithLabels(scrape(), "kafka_topic_partitions", "topic=\"" + topic + "\"} ", "1.0");
+
+        admin.deleteTopics(List.of(topic)).all().get();
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (admin.listTopics().names().get().contains(topic)) {
+            assertTrue(System.nanoTime() < deadline, "topic " + topic + " was not deleted within 30 s");
+            Thread.sleep(200);
+        }
+        collector.collectInternal();
+
+        String scraped = scrape();
+        assertFalse(scraped.contains("topic=\"" + topic + "\""),
+                "a deleted topic must not be exported after the next cycle\n\nScraped output:\n" + scraped);
+    }
+
+    /**
+     * A KIP-848 group ({@code group.protocol=consumer}) is described through
+     * ConsumerGroupDescribe rather than DescribeGroups, so its member count and state must come
+     * out the same as for a classic group.
+     */
+    @Test
+    void consumerProtocolGroupReportsMembersAndState() throws Exception {
+        String topic = "test-kip848-topic";
+        String group = "test-kip848-group";
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, group);
+        props.put(ConsumerConfig.GROUP_PROTOCOL_CONFIG, GroupProtocol.CONSUMER.name());
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
+            consumer.subscribe(List.of(topic));
+            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (consumer.assignment().isEmpty()) {
+                assertTrue(System.nanoTime() < deadline, "no partition assigned to the consumer within 30 s");
+                consumer.poll(Duration.ofMillis(200));
+            }
+            consumer.commitSync();
+
+            // Collect until the group has settled: with a broker-side assignor that runs
+            // asynchronously, the first describe after assignment may still see it reconciling.
+            String stableLine = "kafka_consumergroup_state{consumergroup=\"" + group + "\",state=\"Stable\"} 1.0";
+            deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            do {
+                collector.collectInternal();
+                if (scrape().contains(stableLine)) {
+                    break;
+                }
+                consumer.poll(Duration.ofMillis(200));
+            } while (System.nanoTime() < deadline);
+        }
+
+        String scraped = scrape();
+        assertMetricWithLabels(scraped, "kafka_consumergroup_members",
+                "consumergroup=\"" + group + "\"} ", "1.0");
+        assertMetricWithLabels(scraped, "kafka_consumergroup_state",
+                "consumergroup=\"" + group + "\",state=\"Stable\"} ", "1.0");
     }
 
     /**
