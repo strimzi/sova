@@ -36,7 +36,7 @@ java -classpath "libs/*" io.strimzi.sova.Main
 
 There is no runnable JAR — `maven-jar-plugin` does not set a `Main-Class`, so
 `java -jar target/sova-*.jar` fails. The ZIP produced by `maven-assembly-plugin`
-(`src/assembly/dist.xml`) only bundles `libs/` plus `LICENSE`/`README`/`NOTICE`; run the
+(`src/assembly/dist.xml`) only bundles `libs/` plus `LICENSE`/`README`; run the
 unpacked distribution the same way the README does.
 
 Metrics are available at `http://localhost:9404/metrics`, the liveness probe at `http://localhost:8080/healthy` and the readiness probe at `http://localhost:8080/ready`.
