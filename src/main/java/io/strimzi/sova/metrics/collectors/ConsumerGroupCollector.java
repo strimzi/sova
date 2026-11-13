@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Predicate;
 
 import org.apache.kafka.clients.admin.Admin;
@@ -68,16 +69,44 @@ final class ConsumerGroupCollector {
             Map<ConsumerGroupTopicKey, Long> lagSums) { }
 
     /**
+     * Rejects a group listing in which every broker failed.
+     *
+     * <p>{@code ListGroupsResult.valid()} never fails: when every broker errors it simply yields
+     * no groups. Treating that as "the cluster has no groups" would publish a snapshot without any
+     * consumer group series while readiness stays UP. Like every other lookup in a cycle, a
+     * listing where nothing succeeded fails the cycle instead, so the previous snapshot keeps
+     * being served.
+     *
+     * <p>{@code listGroups} asks each broker separately, so an empty listing with fewer errors
+     * than brokers means some brokers answered and host no groups. That listing, a partial one,
+     * and an empty one with no errors are all used as they are.
+     *
+     * @param valid       the groups the brokers did return
+     * @param errors      the per-broker failures
+     * @param brokerCount the number of brokers in the cluster
+     * @throws CollectionFailedException if nothing was returned and every broker failed
+     */
+    static void requireUsableListing(Collection<GroupListing> valid, Collection<Throwable> errors,
+                                     int brokerCount) throws CollectionFailedException {
+        if (valid.isEmpty() && !errors.isEmpty() && errors.size() >= brokerCount) {
+            throw new CollectionFailedException("Listing consumer groups failed: " + errors.size()
+                    + " error(s) from " + brokerCount + " broker(s) and no groups returned",
+                    errors.iterator().next());
+        }
+    }
+
+    /**
      * Lists consumer groups and filters them by the configured include/exclude patterns.
      *
      * @param admin  Kafka AdminClient
      * @param config application configuration, carrying the compiled group filters
      * @return filtered list of group IDs
-     * @throws java.util.concurrent.ExecutionException   on AdminClient error
+     * @throws ExecutionException   on AdminClient error
      * @throws InterruptedException on thread interrupt
+     * @throws CollectionFailedException if listing failed on every broker
      */
     private static List<String> listGroupIds(Admin admin, SovaConfig config)
-            throws java.util.concurrent.ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, CollectionFailedException {
         // valid() rather than all(): all() completes exceptionally if any single broker could not
         // be queried, so one slow or unreachable broker in a cluster of three would abort this
         // branch and cost the whole cycle, while two thirds of the groups were right there. The
@@ -86,6 +115,11 @@ final class ConsumerGroupCollector {
         ListGroupsResult result = admin.listGroups(ListGroupsOptions.forConsumerGroups());
         Collection<GroupListing> allGroups = result.valid().get();
         Collection<Throwable> errors = result.errors().get();
+        if (allGroups.isEmpty() && !errors.isEmpty()) {
+            // Only on this rare path is the broker count needed, to tell "nobody answered" from
+            // "the brokers that answered host no groups".
+            requireUsableListing(allGroups, errors, admin.describeCluster().nodes().get().size());
+        }
         if (!errors.isEmpty()) {
             LOGGER.warn("Listing consumer groups failed on {} broker(s); groups they host are missing "
                     + "from this cycle. First failure: {}", errors.size(),
@@ -108,12 +142,13 @@ final class ConsumerGroupCollector {
      * @param admin  Kafka AdminClient
      * @param config application configuration
      * @return group membership, state, and committed offsets
-     * @throws java.util.concurrent.ExecutionException   on AdminClient error
+     * @throws ExecutionException   on AdminClient error
      * @throws InterruptedException on thread interrupt
-     * @throws CollectionFailedException if no group description or offset lookup succeeded
+     * @throws CollectionFailedException if listing groups failed on every broker, or if no group
+     *                                   description or offset lookup succeeded
      */
     static ConsumerGroupData collect(Admin admin, SovaConfig config)
-            throws java.util.concurrent.ExecutionException, InterruptedException,
+            throws ExecutionException, InterruptedException,
             CollectionFailedException {
         List<String> groupIds = listGroupIds(admin, config);
         Map<String, Integer> members = new HashMap<>();
