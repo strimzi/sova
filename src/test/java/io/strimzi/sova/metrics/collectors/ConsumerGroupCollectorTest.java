@@ -5,10 +5,15 @@
 package io.strimzi.sova.metrics.collectors;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Predicate;
 
+import org.apache.kafka.clients.admin.GroupListing;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.GroupState;
+import org.apache.kafka.common.GroupType;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
@@ -17,14 +22,18 @@ import io.strimzi.sova.metrics.MetricSnapshot.ConsumerGroupTopicPartitionKey;
 import io.strimzi.sova.metrics.collectors.ConsumerGroupCollector.ConsumerGroupData;
 import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit tests for {@code ConsumerGroupCollector.computeLag}.
+ * Unit tests for the pure steps of {@code ConsumerGroupCollector}: {@code computeLag} and
+ * {@code requireUsableListing}.
  *
- * <p>Pure arithmetic over plain records, with no {@code Admin} dependency, so every scenario is
+ * <p>Pure functions over plain records, with no {@code Admin} dependency, so every scenario is
  * built directly rather than through a stubbed AdminClient. Expected values below are derived
  * from the invariants documented in {@code AGENTS.md} (negative lag is never clamped, {@code -1}
  * is synthesised for uncommitted partitions and excluded from the sums, a topic with no commits
@@ -32,6 +41,45 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ConsumerGroupCollectorTest {
     private static final Predicate<String> ALL_TOPICS = topic -> true;
+
+    /**
+     * Every broker failed {@code listGroups}: an empty listing then means "we do not know", not
+     * "there are no groups", so the cycle must fail like any other lookup in which every element
+     * failed, rather than publish a snapshot without consumer group series.
+     */
+    @Test
+    void listingThatFailedOnEveryBrokerFailsTheCycle() {
+        RuntimeException cause = new RuntimeException("COORDINATOR_LOAD_IN_PROGRESS timed out");
+        CollectionFailedException e = assertThrows(CollectionFailedException.class,
+                () -> ConsumerGroupCollector.requireUsableListing(List.of(),
+                        List.of(cause, new RuntimeException("b2"), new RuntimeException("b3")), 3));
+        assertSame(cause, e.getCause());
+    }
+
+    /**
+     * {@code listGroups} asks every broker separately, so an empty listing with one error can
+     * also mean the brokers that did answer simply host no groups. That is not a failed lookup.
+     */
+    @Test
+    void emptyListingWithSomeBrokersAnsweringIsKept() {
+        assertDoesNotThrow(() -> ConsumerGroupCollector.requireUsableListing(
+                List.of(), List.of(new RuntimeException("one broker down")), 3));
+    }
+
+    @Test
+    void noGroupsAndNoErrorsIsAValidEmptyListing() {
+        assertDoesNotThrow(() -> ConsumerGroupCollector.requireUsableListing(List.of(), List.of(), 3));
+    }
+
+    @Test
+    void partialListingIsKept() {
+        assertDoesNotThrow(() -> ConsumerGroupCollector.requireUsableListing(
+                List.of(listing("g1")), List.of(new RuntimeException("one broker down")), 3));
+    }
+
+    private static GroupListing listing(String groupId) {
+        return new GroupListing(groupId, Optional.of(GroupType.CONSUMER), "consumer", Optional.of(GroupState.STABLE));
+    }
 
     @Test
     void negativeLagIsReportedAsIsNeverClamped() {

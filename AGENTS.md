@@ -64,6 +64,7 @@ Returns a `TopicData` record.
 `collect()` calls `listGroups()` to list and filter consumer groups, `describeConsumerGroups()` for membership/state, and `listConsumerGroupOffsets()` for committed offsets; it needs no topic data, so it runs concurrently with `TopicCollector`.
 `computeLag()` is a separate pure step, run by `MetricsCollector` once both branches are in: it computes offsets and lag against the `TopicData`.
 Uses per-element futures so a single deleted group does not abort the whole cycle.
+`listGroups()` follows the same rule through `requireUsableListing()`: its `valid()` future never fails, so an empty listing with an error from every broker (counted with `describeCluster()`, only on that path) throws `CollectionFailedException` rather than publishing a cycle with no group series.
 Returns a `ConsumerGroupData` record.
 
 **`metrics/collectors/CollectorUtils`** — Stateless helpers shared by all three collectors: `matches(value, include, exclude)` applies the include/exclude pattern pair, and `resolveAll(futures, kind)` resolves a map of per-element `KafkaFuture` values, dropping failures individually instead of failing the whole batch.
