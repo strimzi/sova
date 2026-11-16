@@ -110,6 +110,29 @@ class SovaConfigTest {
     }
 
     @Test
+    void rejectsEqualPorts() {
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> fromEnv(Map.of(
+                CLIENT_CONFIG_ENV, BOOTSTRAP,
+                "STRIMZI_METRICS_PORT", "9404",
+                "STRIMZI_MANAGEMENT_PORT", "9404")));
+
+        assertTrue(e.getMessage().contains("STRIMZI_METRICS_PORT"), "was: " + e.getMessage());
+        assertTrue(e.getMessage().contains("STRIMZI_MANAGEMENT_PORT"), "was: " + e.getMessage());
+        assertTrue(e.getMessage().contains("9404"), "was: " + e.getMessage());
+    }
+
+    @Test
+    void allowsBothPortsZero() {
+        SovaConfig config = fromEnv(Map.of(
+                CLIENT_CONFIG_ENV, BOOTSTRAP,
+                "STRIMZI_METRICS_PORT", "0",
+                "STRIMZI_MANAGEMENT_PORT", "0"));
+
+        assertEquals(0, config.getMetricsPort());
+        assertEquals(0, config.getManagementPort());
+    }
+
+    @Test
     void environmentOverridesAreReadIntoTheMatchingField() {
         SovaConfig config = fromEnv(Map.of(
                 CLIENT_CONFIG_ENV, BOOTSTRAP,

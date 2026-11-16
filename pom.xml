@@ -144,8 +144,7 @@
            ObjectMapper), so it ships in the dist ZIP. But this test-only dependency carries an
            older Jackson that wins Maven's nearest-wins resolution and downgrades the runtime set
            to an incoherent mix (databind 2.19.0 + core 2.21.1 + annotations 2.20). Excluding it
-           here lets kafka-oauth-common's own aligned versions through.
-           Guarded by JacksonAlignmentTest. -->
+           here lets kafka-oauth-common's own aligned versions through. -->
       <exclusions>
         <exclusion>
           <groupId>com.fasterxml.jackson.core</groupId>

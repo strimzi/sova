@@ -103,7 +103,7 @@ The `process_*` and `jvm_*` families are exported too.
 | `STRIMZI_TOPIC_REGEX`                      | `.*`         | Topic include regex                                                                                                       |
 | `STRIMZI_TOPIC_EXCLUDE_REGEX`              | *(none)*     | Topic exclude regex                                                                                                       |
 | `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION` | *(required)* | Kafka client properties, one `key=value` per line; must contain `bootstrap.servers` (plus TLS, SASL, other client config) |
-| `STRIMZI_METRICS_PORT`                     | `9404`       | Port for `/metrics` endpoint                                                                                              |
+| `STRIMZI_METRICS_PORT`                     | `9404`       | Port for `/metrics` endpoint; must differ from `STRIMZI_MANAGEMENT_PORT`                                                  |
 | `STRIMZI_MANAGEMENT_PORT`                  | `8080`       | Port for `/healthy` and `/ready` endpoints                                                                                |
 | `STRIMZI_COLLECT_INTERVAL_MS`              | `30000`      | Metrics collection interval in milliseconds                                                                               |
 | `STRIMZI_LOG_LEVEL`                        | `INFO`       | Root log level                                                                                                            |

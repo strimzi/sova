@@ -188,6 +188,10 @@ public final class SovaConfig {
                 getEnv(env, ENV_METRICS_PORT, String.valueOf(DEFAULT_METRICS_PORT)));
         managementPort = parsePortOrThrow(ENV_MANAGEMENT_PORT,
                 getEnv(env, ENV_MANAGEMENT_PORT, String.valueOf(DEFAULT_MANAGEMENT_PORT)));
+        if (metricsPort != 0 && metricsPort == managementPort) {
+            throw new IllegalStateException("Invalid ports: " + ENV_METRICS_PORT + " and "
+                    + ENV_MANAGEMENT_PORT + " must differ, both are " + metricsPort);
+        }
         collectIntervalMs = parsePositiveLongOrThrow(ENV_COLLECT_INTERVAL_MS,
                 getEnv(env, ENV_COLLECT_INTERVAL_MS, String.valueOf(DEFAULT_COLLECT_INTERVAL_MS)));
     }
