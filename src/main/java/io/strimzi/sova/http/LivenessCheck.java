@@ -18,7 +18,7 @@ import com.sun.net.httpserver.HttpHandler;
  * This is deliberate: a failed collection cycle must not restart the pod, because Sova keeps
  * serving the last good snapshot while collection is broken. Liveness only catches a wedged
  * JVM or exhausted HTTP threads — conditions under which this handler stops responding.
- * Collector health is reported by {@link ReadinessCheck} instead.
+ * Readiness is likewise just the HTTP server: see {@link ReadinessCheck}.
  *
  * <p>Threading: stateless handler — safe to call concurrently.
  */

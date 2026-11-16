@@ -11,7 +11,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,7 +20,8 @@ import io.prometheus.metrics.model.registry.MultiCollector;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.prometheus.metrics.model.snapshots.MetricSnapshots;
 
-import io.strimzi.sova.metrics.collectors.MetricsCollector;
+import io.strimzi.sova.metrics.MetricsRegistry;
+import io.strimzi.sova.metrics.TestSnapshots;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,28 +34,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HttpServersTest {
     private static final String UP = "{\"status\":\"UP\"}";
-    private static final String DOWN = "{\"status\":\"DOWN\"}";
     private static final String MAX_REQ_TIME = "sun.net.httpserver.maxReqTime";
 
     private HttpServers servers;
     private HttpClient client;
     /** A registry per test, so one test's gauges can never collide with another's. */
     private PrometheusRegistry registry;
-    private final AtomicBoolean healthy = new AtomicBoolean(true);
 
     @BeforeEach
     void startServers() throws Exception {
         registry = new PrometheusRegistry();
         client = HttpClient.newHttpClient();
 
-        MetricsCollector collector = new MetricsCollector(null, null, null) {
-            @Override
-            public boolean isHealthy() {
-                return healthy.get();
-            }
-        };
-
-        servers = HttpServers.start(0, 0, collector, registry);
+        servers = HttpServers.start(0, 0, registry);
     }
 
     @AfterEach
@@ -117,15 +108,21 @@ class HttpServersTest {
     }
 
     @Test
-    void readinessIsDownWhileTheCollectorIsUnhealthyButLivenessStaysUp() throws Exception {
-        healthy.set(false);
-
+    void readyIsUpBeforeAnyCycleCompletes() throws Exception {
         HttpResponse<String> ready = get(servers.getManagementPort(), "/ready");
 
-        assertEquals(503, ready.statusCode());
-        assertEquals(DOWN, ready.body());
-        assertEquals(200, get(servers.getManagementPort(), "/healthy").statusCode(),
-                "a stale collector must not restart the pod");
+        assertEquals(200, ready.statusCode());
+        assertEquals(UP, ready.body());
+    }
+
+    @Test
+    void readinessDoesNotDependOnCollection() throws Exception {
+        MetricsRegistry sova = new MetricsRegistry();
+        sova.update(TestSnapshots.builder().collectedAtMs(0).build());
+        try (HttpServers own = HttpServers.start(0, 0, sova.prometheusRegistry())) {
+            assertEquals(200, get(own.getManagementPort(), "/ready").statusCode(),
+                    "an ancient snapshot must not turn readiness DOWN");
+        }
     }
 
     @Test
@@ -189,8 +186,7 @@ class HttpServersTest {
             int metricsPort = freePort();
 
             assertThrows(IOException.class,
-                    () -> HttpServers.start(metricsPort, squatter.getLocalPort(),
-                            new MetricsCollector(null, null, null), registry));
+                    () -> HttpServers.start(metricsPort, squatter.getLocalPort(), registry));
 
             // The JDK's HTTP dispatcher thread is non-daemon: a metrics listener left running
             // keeps the JVM alive forever with no probe endpoint to report the failure. If it is

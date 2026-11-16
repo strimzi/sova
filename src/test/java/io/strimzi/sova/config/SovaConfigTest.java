@@ -96,7 +96,7 @@ class SovaConfigTest {
         assertNamesVariable("STRIMZI_COLLECT_INTERVAL_MS", "soon");
         assertNamesVariable("STRIMZI_COLLECT_INTERVAL_MS", "0");
         assertNamesVariable("STRIMZI_COLLECT_INTERVAL_MS", "-1");
-        // Doubled by MetricsCollector.isHealthy(), so this would overflow to a negative window
+        // Too large for interval arithmetic to stay safe
         assertNamesVariable("STRIMZI_COLLECT_INTERVAL_MS", String.valueOf(Long.MAX_VALUE));
     }
 

@@ -50,7 +50,7 @@ Orchestrates one collection cycle by running `BrokerCollector`, `TopicCollector`
 `collect()` never throws — a scheduled task that throws is cancelled silently and never runs again, which would freeze the pod without ever failing liveness.
 Failures are swallowed by level: `InterruptedException` restores the interrupt flag and logs DEBUG (shutdown, not a failure), `Exception` logs WARN, `Throwable` logs ERROR.
 None of them update the registry, so stale metrics continue to be served.
-Readiness is derived solely from the age of the snapshot in `MetricsRegistry`: DOWN until the first cycle succeeds, and DOWN again once the last good snapshot is older than two collection intervals.
+Staleness is exposed as the `sova_last_successful_collection_timestamp_seconds` metric, not through a probe.
 
 **`metrics/collectors/BrokerCollector`** — Stateless collector.
 Calls `describeCluster()` and returns broker count and address map as a `BrokerData` record.
@@ -77,7 +77,7 @@ If every element of a non-empty batch fails, `resolveAll` throws `CollectionFail
 Always 200 — a failed collection must not restart the pod, since stale metrics keep being served.
 
 **`http/ReadinessCheck`** — JDK `HttpHandler` that exposes `GET /ready`.
-Reports UP (200) or DOWN (503) from `MetricsCollector.isHealthy()`, which is false until the first cycle succeeds and false again once the last good snapshot is older than two collection intervals.
+Always 200, like `/healthy`: it reports that the HTTP server answers, not how fresh the snapshot is.
 
 ---
 
@@ -137,10 +137,9 @@ mvn test -Dtest=MetricsRegistryTest
 8. **The scrape registry is owned, not global.**
    `MetricsRegistry` constructs its own `PrometheusRegistry` and `HttpServers.start` is handed that instance.
    Never go back to `PrometheusRegistry.defaultRegistry`: a JVM-global registry makes construction order decide what survives, and the only way to make repeated construction safe is `clear()`, which silently drops whatever else registered — the JVM instrumentation included.
-9. **Readiness is staleness, nothing else.**
-   `isHealthy()` is true while the snapshot in `MetricsRegistry` is younger than two collection intervals.
-   Only a successful cycle replaces that snapshot, so failed cycles and cycles that hang (which throw nothing) both surface the same way.
-   Do not add a separate "last cycle ok" flag: it cannot see a hung cycle, and it duplicates what the snapshot age already says.
+9. **Readiness is the HTTP server, nothing else.**
+   `/ready` is 200 whenever the management listener answers.
+   Staleness is a metrics concern: read `sova_last_successful_collection_timestamp_seconds` and `sova_collection_failures_total`.
 
 ---
 

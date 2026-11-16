@@ -11,34 +11,20 @@ import java.nio.charset.StandardCharsets;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
-import io.strimzi.sova.metrics.collectors.MetricsCollector;
-
 /**
  * HTTP handler that exposes a readiness health check at {@code GET /ready}.
  *
- * <p>Returns HTTP 200 with {@code {"status":"UP"}} while the last successfully served snapshot
- * is younger than two collection intervals, or HTTP 503 with {@code {"status":"DOWN"}} once it
- * is older than that (including before the first cycle has ever succeeded). This is staleness,
- * not "did the last cycle succeed": a single failed or hung cycle still reports UP as long as
- * the previous good snapshot has not aged out, since stale metrics keep being served either way.
+ * <p>Always returns HTTP 200 with {@code {"status":"UP"}} when it is able to answer at all: the
+ * operator blocks Kafka reconciliation on Sova's readiness, so a broken collection must not turn
+ * it DOWN. How stale the exported numbers are is a metrics concern, read from
+ * {@code sova_last_successful_collection_timestamp_seconds}, not a probe (see invariant 9 in
+ * {@code AGENTS.md}).
  *
- * <p>Threading: stateless handler backed by a volatile read in {@link MetricsCollector#isHealthy()}.
+ * <p>Threading: stateless handler, safe to call concurrently.
  */
 public class ReadinessCheck implements HttpHandler {
     private static final String CONTENT_TYPE = "application/json";
     private static final byte[] BODY_UP = "{\"status\":\"UP\"}".getBytes(StandardCharsets.UTF_8);
-    private static final byte[] BODY_DOWN = "{\"status\":\"DOWN\"}".getBytes(StandardCharsets.UTF_8);
-
-    private final MetricsCollector collector;
-
-    /**
-     * Constructs the handler.
-     *
-     * @param collector the collector whose health state is reported
-     */
-    public ReadinessCheck(MetricsCollector collector) {
-        this.collector = collector;
-    }
 
     /**
      * Handles a readiness probe request. Only {@code GET} is accepted; anything else returns 405.
@@ -54,14 +40,11 @@ public class ReadinessCheck implements HttpHandler {
                 return;
             }
 
-            boolean healthy = collector.isHealthy();
-            byte[] body = healthy ? BODY_UP : BODY_DOWN;
-
             exchange.getResponseHeaders()
                 .set("Content-Type", CONTENT_TYPE);
-            exchange.sendResponseHeaders(healthy ? 200 : 503, body.length);
+            exchange.sendResponseHeaders(200, BODY_UP.length);
             try (OutputStream out = exchange.getResponseBody()) {
-                out.write(body);
+                out.write(BODY_UP);
             }
         }
     }

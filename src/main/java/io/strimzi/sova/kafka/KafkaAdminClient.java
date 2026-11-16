@@ -64,7 +64,7 @@ public class KafkaAdminClient {
     static Properties buildProperties(SovaConfig config) {
         Properties props = new Properties();
         // Halve the 60 s client default. A cycle makes several sequential calls, so this bounds a
-        // call, not a cycle — the cycle is covered by the staleness window in MetricsCollector —
+        // call, not a cycle — the cycle is not bounded here —
         // but it stops one unresponsive coordinator from stretching every cycle past the interval.
         props.setProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(API_TIMEOUT.toMillis()));
         props.putAll(config.getKafkaAdminClientConfiguration());

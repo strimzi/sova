@@ -71,7 +71,7 @@ class CollectorUtilsTest {
                 () -> CollectorUtils.resolveAll(futures, "topic"),
                 "a batch in which nothing resolved must not look like an empty cluster: returning "
                         + "an empty map would be published as a successful cycle, advancing the "
-                        + "staleness timestamp and leaving readiness UP with no series at all");
+                        + "last-success timestamp and leaving no series at all");
 
         assertInstanceOf(TopicAuthorizationException.class, thrown.getCause(),
                 "the underlying failure must survive so the log says why");

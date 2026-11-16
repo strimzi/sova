@@ -15,8 +15,8 @@ package io.strimzi.sova.metrics.collectors;
  * <p>Checked, and deliberately not caught inside the collectors. It propagates out of the branch
  * through {@code ExecutionException} to {@link MetricsCollector#collect()}, which logs it at WARN
  * and returns without updating the registry. The previous snapshot keeps being served and ages;
- * if the failure persists, readiness goes DOWN on its own after two collection intervals, which is
- * the only readiness mechanism this codebase has (see invariant 9 in {@code AGENTS.md}).
+ * readiness is unaffected, and the staleness shows in
+ * {@code sova_last_successful_collection_timestamp_seconds} (see invariant 9 in {@code AGENTS.md}).
  */
 public class CollectionFailedException extends Exception {
     private static final long serialVersionUID = 1L;

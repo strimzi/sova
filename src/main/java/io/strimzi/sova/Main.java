@@ -77,7 +77,7 @@ public class Main {
                 TimeUnit.MILLISECONDS);
 
         HttpServers servers = HttpServers.start(
-                config.getMetricsPort(), config.getManagementPort(), collector, registry.prometheusRegistry());
+                config.getMetricsPort(), config.getManagementPort(), registry.prometheusRegistry());
 
         Runtime.getRuntime().addShutdownHook(
                 new Thread(() -> shutdown(servers, scheduler, admin), "sova-shutdown"));

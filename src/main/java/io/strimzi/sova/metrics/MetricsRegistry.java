@@ -35,8 +35,8 @@ public class MetricsRegistry {
 
     /**
      * What a scrape serves before the first collection cycle completes: no brokers, no topics,
-     * no consumer groups. Readiness stays DOWN until a cycle succeeds, so this is what a scrape
-     * that races startup sees.
+     * no consumer groups. Readiness does not wait for a cycle, so this is what a scrape
+     * that races startup sees, with the last-success timestamp reading 0.
      */
     private static final MetricSnapshot EMPTY = new MetricSnapshot(
         0,

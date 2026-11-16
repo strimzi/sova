@@ -19,7 +19,6 @@ import io.prometheus.metrics.exporter.httpserver.HttpErrorHandlingPolicy;
 import io.prometheus.metrics.exporter.httpserver.MetricsHandler;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 
-import io.strimzi.sova.metrics.collectors.MetricsCollector;
 
 /**
  * Owns Sova's two JDK built-in HTTP listeners.
@@ -56,12 +55,11 @@ public final class HttpServers implements AutoCloseable {
      *
      * @param metricsPort    port for {@code /metrics}; {@code 0} binds an ephemeral port
      * @param managementPort port for {@code /healthy} and {@code /ready}; {@code 0} binds an ephemeral port
-     * @param collector      collector whose health backs the readiness probe
      * @param registry       the registry a scrape reads
      * @return the started listeners
      * @throws IOException if either port cannot be bound
      */
-    public static HttpServers start(int metricsPort, int managementPort, MetricsCollector collector, PrometheusRegistry registry) throws IOException {
+    public static HttpServers start(int metricsPort, int managementPort, PrometheusRegistry registry) throws IOException {
         hardenJdkHttpServerDefaults();
 
         HttpServer metrics = HttpServer.create(new InetSocketAddress(metricsPort), 0);
@@ -86,7 +84,7 @@ public final class HttpServers implements AutoCloseable {
         try {
             HttpServer management = HttpServer.create(new InetSocketAddress(managementPort), 0);
             management.createContext("/healthy", new LivenessCheck());
-            management.createContext("/ready", new ReadinessCheck(collector));
+            management.createContext("/ready", new ReadinessCheck());
             ExecutorService managementExecutor = Executors.newVirtualThreadPerTaskExecutor();
             management.setExecutor(managementExecutor);
             management.start();

@@ -28,7 +28,7 @@ import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
  * and hands it to {@link MetricsRegistry#update(MetricSnapshot)} as an atomic swap.
  *
  * <p>A failed cycle never updates the registry, so the previous snapshot continues to be served to
- * scrapers and ages until readiness reports the staleness. How the failure is logged depends on
+ * scrapers while the last-success timestamp ages. How the failure is logged depends on
  * what it was: {@link InterruptedException} is shutdown rather than failure and logs DEBUG, an
  * {@link Exception} logs WARN, and a {@link Throwable} logs ERROR.
  *
@@ -37,14 +37,6 @@ import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
  */
 public class MetricsCollector {
     private static final Logger LOGGER = LoggerFactory.getLogger(MetricsCollector.class);
-
-    /**
-     * How many collection intervals the served snapshot may age before it counts as stale.
-     *
-     * <p>Two rather than one: collection runs at a fixed delay, so a healthy snapshot is replaced
-     * every {@code interval + cycle duration}, which is always a little more than one interval.
-     */
-    private static final int STALE_AFTER_INTERVALS = 2;
 
     private final Admin admin;
     private final MetricsRegistry registry;
@@ -61,23 +53,6 @@ public class MetricsCollector {
         this.admin = admin;
         this.registry = registry;
         this.config = config;
-    }
-
-    /**
-     * Readiness is derived from the age of the snapshot being served, and nothing else.
-     *
-     * <p>Only a successful cycle updates the registry, so a fresh snapshot means a recent success.
-     * A failed cycle needs no flag of its own: it stops the snapshot being replaced, and the probe
-     * goes DOWN once that snapshot is too old. The same rule covers a cycle that hangs and throws
-     * nothing, and the pre-first-cycle state, where the registry still holds its empty snapshot
-     * stamped {@code 0}.
-     *
-     * @return {@code true} when the snapshot being served is no older than
-     * {@link #STALE_AFTER_INTERVALS} collection intervals
-     */
-    public boolean isHealthy() {
-        long ageMs = System.currentTimeMillis() - registry.lastCollectedAtMs();
-        return ageMs <= STALE_AFTER_INTERVALS * config.getCollectIntervalMs();
     }
 
     /**
@@ -102,7 +77,7 @@ public class MetricsCollector {
         } catch (Throwable t) {
             // An Error raised on the scheduler thread itself (a branch's Error arrives wrapped in
             // ExecutionException above). Log it and keep the schedule alive: the next cycle may
-            // well succeed, and if it does not the snapshot ages out and readiness goes DOWN.
+            // well succeed, and if it does not the last-success timestamp keeps ageing.
             LOGGER.error("Collection cycle failed with an error, stale metrics keep being served", t);
         }
     }

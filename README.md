@@ -110,9 +110,9 @@ The `process_*` and `jvm_*` families are exported too.
 
 `/healthy` is always 200 while the JVM can answer: a broken collection must not restart a pod that is still serving its last good snapshot.
 
-`/ready` is 200 only while the snapshot being served is younger than two collection intervals.
-Only a successful collection cycle replaces the snapshot, so failing cycles and cycles that hang - which throw nothing - both turn the probe DOWN once the exported numbers are frozen for that long. 
-Before the first cycle completes there is no snapshot, so the probe is DOWN.
+`/ready` is also 200 while the JVM can answer.
+Staleness is exposed as metrics instead: alert on `time() - sova_last_successful_collection_timestamp_seconds`.
+Before the first cycle completes, `/metrics` serves an empty snapshot and that timestamp reads `0`.
 
 ---
 

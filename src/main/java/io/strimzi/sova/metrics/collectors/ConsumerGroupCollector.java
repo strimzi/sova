@@ -73,7 +73,7 @@ final class ConsumerGroupCollector {
      *
      * <p>{@code ListGroupsResult.valid()} never fails: when every broker errors it simply yields
      * no groups. Treating that as "the cluster has no groups" would publish a snapshot without any
-     * consumer group series while readiness stays UP. Like every other lookup in a cycle, a
+     * consumer group series and advancing the last-success timestamp. Like every other lookup in a cycle, a
      * listing where nothing succeeded fails the cycle instead, so the previous snapshot keeps
      * being served.
      *

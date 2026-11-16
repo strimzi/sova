@@ -66,11 +66,11 @@ class MainSmokeIT {
                 log);
         try {
             awaitStatus(managementPort, "/ready", 200);
+            // Readiness no longer waits for a cycle, so wait for the first one explicitly.
+            HttpResponse<String> metrics = awaitMetric(metricsPort, "kafka_brokers 1.0");
 
             assertEquals(200, get(managementPort, "/healthy").statusCode());
-            HttpResponse<String> metrics = get(metricsPort, "/metrics");
             assertEquals(200, metrics.statusCode());
-            assertTrue(metrics.body().contains("kafka_brokers 1.0"), metrics.body());
             // The management port must not expose the metrics.
             assertEquals(404, get(managementPort, "/metrics").statusCode());
 
@@ -86,7 +86,7 @@ class MainSmokeIT {
     }
 
     @Test
-    void isLiveButNotReadyWhenTheClusterIsUnreachable() throws Exception {
+    void isLiveAndReadyEvenWhenTheClusterIsUnreachable() throws Exception {
         int metricsPort = freePort();
         int managementPort = freePort();
         // Nothing listens on this port: the first cycle can never succeed.
@@ -97,8 +97,8 @@ class MainSmokeIT {
         try {
             awaitStatus(managementPort, "/healthy", 200);
 
-            assertEquals(503, get(managementPort, "/ready").statusCode(),
-                    "a pod that has never collected anything must not be Ready");
+            assertEquals(200, get(managementPort, "/ready").statusCode(),
+                    "readiness is the HTTP server: a failing collection must not block the operator");
         } finally {
             sova.destroy();
             sova.waitFor();
@@ -146,6 +146,26 @@ class MainSmokeIT {
         }
         throw new AssertionError("GET " + path + " on port " + port + " did not return " + expected
                 + " within " + WAIT + ", last status " + last);
+    }
+
+    private static HttpResponse<String> awaitMetric(int port, String expected) throws InterruptedException {
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        String last = "";
+        while (System.nanoTime() < deadline) {
+            try {
+                HttpResponse<String> res = get(port, "/metrics");
+                last = res.body();
+                if (res.statusCode() == 200 && last.contains(expected)) {
+                    return res;
+                }
+            } catch (IOException e) {
+                // listener not up yet
+                last = "";
+            }
+            Thread.sleep(250);
+        }
+        throw new AssertionError("/metrics on port " + port + " did not contain '" + expected
+                + "' within " + WAIT + ", last body: " + last);
     }
 
     private static HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {

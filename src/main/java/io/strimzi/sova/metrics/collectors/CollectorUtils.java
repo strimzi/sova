@@ -55,14 +55,14 @@ final class CollectorUtils {
      * <p>Dropping elements is only safe while <em>some</em> of them resolve. If every element of a
      * non-empty batch fails — an ACL change that revokes Describe, say — the caller would receive
      * an empty result indistinguishable from a cluster that genuinely has no topics or groups, and
-     * would publish it as a successful cycle: the staleness timestamp advances, readiness stays UP,
+     * would publish it as a successful cycle: the last-success timestamp advances,
      * and every affected series silently vanishes from the scrape. Threshold alerts then stop
      * firing rather than firing. So a wholly failed batch throws instead.
      *
      * <p>On a one-element batch this cannot be told apart from a single routine deletion, so such
-     * a cycle is skipped where it used to degrade. That is harmless: readiness only trips after two
-     * stale intervals, so one skipped cycle never flips the probe, while a persistent total failure
-     * correctly does.
+     * a cycle is skipped where it used to degrade. That is harmless: one skipped cycle leaves the
+     * previous snapshot being served, and a persistent total failure shows as a last-success
+     * timestamp that stops advancing.
      *
      * @param futures per-element futures keyed by topic name, group id, or partition
      * @param kind    what the keys are, used in the log and failure messages

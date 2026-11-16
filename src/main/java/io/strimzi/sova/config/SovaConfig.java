@@ -85,7 +85,7 @@ public final class SovaConfig {
     private final int metricsPort;
 
     /**
-     * Management HTTP port (for health and readiness probes).
+     * Management HTTP port (for the liveness and readiness probes).
      * Env var: {@code STRIMZI_MANAGEMENT_PORT}. Default: {@code 8080}.
      */
     private final int managementPort;
@@ -257,15 +257,14 @@ public final class SovaConfig {
      *
      * <p>A value {@code <= 0} passed to {@code ScheduledExecutorService.scheduleWithFixedDelay}
      * throws a bare, message-less {@code IllegalArgumentException} at startup instead of naming
-     * the variable to fix, so it is rejected here instead. Values large enough to overflow when
-     * doubled are rejected too, since {@code MetricsCollector.isHealthy()} multiplies this value
-     * by two to decide staleness, and an overflow to negative would pin readiness DOWN forever.
+     * the variable to fix, so it is rejected here instead. Values above a quarter of
+     * {@link Long#MAX_VALUE} are rejected too, so arithmetic on the interval cannot overflow.
      *
      * @param envVarName the variable the value came from, used in the failure message
      * @param value      the raw value
      * @return the parsed positive long
-     * @throws IllegalStateException if the value is not a long, is not positive, or would
-     *                               overflow when doubled
+     * @throws IllegalStateException if the value is not a long, is not positive, or is too
+     *                               large
      */
     static long parsePositiveLongOrThrow(String envVarName, String value) {
         long parsed = parseLongOrThrow(envVarName, value);
