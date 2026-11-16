@@ -76,6 +76,8 @@ The `/metrics` endpoint is served over plain HTTP.
 | `kafka_consumergroup_state`                         | `consumergroup`, `state`                     | Presence indicator: emits `1` for the group's current state (the `state` label), including `Empty` and `Dead`. Query a specific state, e.g. `kafka_consumergroup_state{state="Stable"}` |
 | `sova_build_info`                                   | `version`, `revision`, `branch`, `java_info` | Build information                                                                                                                                                                       |
 | `sova_last_successful_collection_timestamp_seconds` | —                                            | Unix timestamp of the last successful collection cycle, 0 if none has completed                                                                                                         |
+| `sova_collection_failures_total` | — | Collection cycles that ended without publishing a snapshot |
+| `sova_collection_duration_seconds` | — | Duration of the last finished collection cycle, successful or failed |
 
 The `process_*` and `jvm_*` families are exported too.
 
@@ -88,6 +90,7 @@ The `process_*` and `jvm_*` families are exported too.
 - **Internal topics are not reported.** `__consumer_offsets` and `__transaction_state` have no `kafka_topic_*` series, unlike in Kafka Exporter.
 - **Only consumer groups are reported**, both classic and KIP-848 (`group.protocol=consumer`) ones. Kafka Connect worker groups, share groups and KIP-1071 streams-protocol groups have no `kafka_consumergroup_*` series. Sink connectors and Kafka Streams applications on the classic protocol use ordinary consumer groups, so their lag is reported.
 - **`sova_last_successful_collection_timestamp_seconds` is the staleness signal**, reading `0` before the first successful cycle. `time() - sova_last_successful_collection_timestamp_seconds` is the "is this exporter actually working" panel.
+- **`sova_collection_failures_total` counts cycles that ended without publishing a snapshot.** Alert on `increase(sova_collection_failures_total[5m]) > 0`. Cycles interrupted by shutdown are not counted. `sova_collection_duration_seconds` is the duration of the last finished cycle, successful or failed.
 
 ---
 

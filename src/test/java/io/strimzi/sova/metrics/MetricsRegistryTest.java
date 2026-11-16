@@ -84,7 +84,9 @@ class MetricsRegistryTest {
                 "kafka_consumergroup_lag_sum",
                 "kafka_consumergroup_state",
                 "sova_last_successful_collection_timestamp_seconds",
-                "sova_build")) {
+                "sova_build",
+                "sova_collection_failures",
+                "sova_collection_duration_seconds")) {
             assertTrue(actualNames.contains(name),
                     "Expected metric '" + name + "' not found among registered names: " + actualNames);
         }

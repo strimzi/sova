@@ -4,6 +4,7 @@
  */
 package io.strimzi.sova.metrics.collectors;
 
+import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import io.strimzi.sova.config.SovaConfig;
 import io.strimzi.sova.metrics.MetricsRegistry;
 
+import static io.strimzi.sova.metrics.TestSnapshots.scrape;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -119,5 +121,64 @@ class MetricsCollectorThreadingTest {
 
         assertTrue(slowBranchFinished.get(),
                 "collect() must wait for its branch threads, not just interrupt them");
+    }
+
+    /**
+     * A cycle that ends without publishing a snapshot counts as one failure and still reports
+     * how long it took.
+     *
+     * @throws IOException if the text writer fails
+     */
+    @Test
+    void failedCycleIncrementsFailureCounter() throws IOException {
+        MetricsRegistry registry = new MetricsRegistry();
+        MetricsCollector collector = new MetricsCollector(null, registry, CONFIG);
+
+        collector.collect();
+        collector.collect();
+
+        String body = scrape(registry);
+        assertTrue(body.contains("sova_collection_failures_total 2.0"), body);
+        assertTrue(body.contains("sova_collection_duration_seconds "), body);
+    }
+
+    /**
+     * @throws IOException if the text writer fails
+     */
+    @Test
+    void successfulCycleDoesNotIncrementFailureCounter() throws IOException {
+        MetricsRegistry registry = new MetricsRegistry();
+        MetricsCollector collector = new MetricsCollector(null, registry, CONFIG) {
+            @Override
+            void collectInternal() {
+                // returns normally: a successful cycle
+            }
+        };
+
+        collector.collect();
+
+        assertTrue(scrape(registry).contains("sova_collection_failures_total 0.0"));
+    }
+
+    /**
+     * Shutdown interrupts a cycle; that is not a collection failure.
+     *
+     * @throws IOException if the text writer fails
+     */
+    @Test
+    void interruptedCycleIsNotCountedAsFailure() throws IOException {
+        MetricsRegistry registry = new MetricsRegistry();
+        MetricsCollector collector = new MetricsCollector(null, registry, CONFIG) {
+            @Override
+            void collectInternal() throws InterruptedException {
+                throw new InterruptedException("simulated shutdown");
+            }
+        };
+
+        collector.collect();
+        // collect() restores the interrupt flag; clear it so later tests are not polluted.
+        Thread.interrupted();
+
+        assertTrue(scrape(registry).contains("sova_collection_failures_total 0.0"));
     }
 }

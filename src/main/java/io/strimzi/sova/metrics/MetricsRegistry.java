@@ -4,8 +4,11 @@
  */
 package io.strimzi.sova.metrics;
 
+import java.time.Duration;
 import java.util.Map;
 
+import io.prometheus.metrics.core.metrics.Counter;
+import io.prometheus.metrics.core.metrics.Gauge;
 import io.prometheus.metrics.instrumentation.jvm.JvmMetrics;
 import io.prometheus.metrics.model.registry.MultiCollector;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
@@ -20,6 +23,10 @@ import io.prometheus.metrics.model.snapshots.MetricSnapshots;
  * once and builds all metric families from it via {@link MetricsSnapshotRenderer}. This makes a scrape
  * atomic — it reflects exactly one collection cycle — and makes series disappear when they
  * leave the cluster, because nothing is carried over from the previous call.
+ *
+ * <p>{@code sova_collection_failures_total} and {@code sova_collection_duration_seconds} are
+ * process-level series registered directly on the registry, not part of {@link MetricSnapshot}, so
+ * invariant 6 (a scrape serves exactly one cycle) applies only to the Kafka series.
  */
 public class MetricsRegistry {
     /**
@@ -65,6 +72,16 @@ public class MetricsRegistry {
      */
     private final InfoSnapshot infoSnapshot;
 
+    private final Counter collectionFailures = Counter.builder()
+        .name("sova_collection_failures")
+        .help("Collection cycles that ended without publishing a snapshot")
+        .build();
+
+    private final Gauge collectionDuration = Gauge.builder()
+        .name("sova_collection_duration_seconds")
+        .help("Duration of the last finished collection cycle, successful or failed")
+        .build();
+
     /**
      * Constructs the registry with the build metadata of the running application.
      *
@@ -83,6 +100,8 @@ public class MetricsRegistry {
     public MetricsRegistry(BuildInfo buildInfo) {
         this.infoSnapshot = MetricsSnapshotRenderer.buildInfo(buildInfo);
         prometheusRegistry.register(this::collectSnapshots);
+        prometheusRegistry.register(collectionFailures);
+        prometheusRegistry.register(collectionDuration);
         // process_* and jvm_* families
         JvmMetrics.builder()
             .register(prometheusRegistry);
@@ -107,6 +126,21 @@ public class MetricsRegistry {
      */
     public void update(MetricSnapshot snapshot) {
         current = snapshot;
+    }
+
+    /**
+     * Records a finished collection cycle: sets the duration gauge and, when the cycle ended
+     * without publishing a snapshot, increments the failure counter. Not called for a cycle
+     * interrupted by shutdown.
+     *
+     * @param duration  how long the cycle ran
+     * @param succeeded whether the cycle published a snapshot
+     */
+    public void recordCycle(Duration duration, boolean succeeded) {
+        collectionDuration.set(duration.toNanos() / 1e9);
+        if (!succeeded) {
+            collectionFailures.inc();
+        }
     }
 
     /**

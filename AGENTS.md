@@ -30,6 +30,7 @@ Applies the default API timeout, then merges the Kafka client properties from `S
 There is no Sova-side security logic: whoever sets the variable decides the mechanism.
 
 **`metrics/MetricsRegistry`** — Holds the most recently collected `MetricSnapshot` in a `volatile` field and registers a single `MultiCollector`, plus the JVM/process instrumentation, with a `PrometheusRegistry` it owns (deliberately not `defaultRegistry` — see invariant 8).
+`sova_collection_failures_total` and `sova_collection_duration_seconds` are process-level series registered directly on the registry through `recordCycle(Duration, boolean)`, not part of `MetricSnapshot`; invariant 6 applies only to the Kafka series.
 `update(MetricSnapshot)` is one reference swap; every scrape reads that reference once and builds all metric families from it via `MetricsSnapshotRenderer`.
 
 **`metrics/MetricSnapshot`** — The record carrying one collection cycle, plus the `PartitionMetrics` value and the three composite-key records used as map keys.
@@ -49,7 +50,8 @@ There is no resource filtering.
 Orchestrates one collection cycle by running `BrokerCollector`, `TopicCollector`, and `ConsumerGroupCollector` concurrently on virtual threads, then computes lag from their results, assembles a `MetricSnapshot` and calls `registry.update(snapshot)`.
 `collect()` never throws — a scheduled task that throws is cancelled silently and never runs again, which would freeze the pod without ever failing liveness.
 Failures are swallowed by level: `InterruptedException` restores the interrupt flag and logs DEBUG (shutdown, not a failure), `Exception` logs WARN, `Throwable` logs ERROR.
-None of them update the registry, so stale metrics continue to be served.
+None of them update the registry's snapshot, so stale metrics continue to be served.
+Every finished cycle calls `registry.recordCycle(elapsed, succeeded)`; the `Exception` and `Throwable` paths count as failures, the `InterruptedException` path records nothing.
 Staleness is exposed as the `sova_last_successful_collection_timestamp_seconds` metric, not through a probe.
 
 **`metrics/collectors/BrokerCollector`** — Stateless collector.

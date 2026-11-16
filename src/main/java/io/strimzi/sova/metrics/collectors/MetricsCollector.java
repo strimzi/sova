@@ -4,6 +4,7 @@
  */
 package io.strimzi.sova.metrics.collectors;
 
+import java.time.Duration;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,21 +64,28 @@ public class MetricsCollector {
      * is cancelled silently and never runs again, which would leave the pod alive but frozen:
      * liveness is always 200, so Kubernetes would not restart it. That is why {@link Throwable}
      * is caught and not just {@link Exception}.
+     *
+     * <p>Every finished cycle is reported to {@link MetricsRegistry#recordCycle}, except one
+     * interrupted by shutdown.
      */
     public void collect() {
+        long startNs = System.nanoTime();
         try {
             collectInternal();
+            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), true);
         } catch (InterruptedException e) {
             // Shutdown interrupts the scheduler thread mid-cycle. Restore the flag so the
             // executor can finish tearing down, and do not count this as a collection failure.
             Thread.currentThread().interrupt();
             LOGGER.debug("Collection cycle interrupted");
         } catch (Exception e) {
+            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), false);
             LOGGER.warn("Collection cycle failed, stale metrics keep being served", e);
         } catch (Throwable t) {
             // An Error raised on the scheduler thread itself (a branch's Error arrives wrapped in
             // ExecutionException above). Log it and keep the schedule alive: the next cycle may
             // well succeed, and if it does not the last-success timestamp keeps ageing.
+            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), false);
             LOGGER.error("Collection cycle failed with an error, stale metrics keep being served", t);
         }
     }
