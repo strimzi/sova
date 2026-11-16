@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Unit tests for how {@link MetricsCollector} treats the threads it runs on and the threads it
  * starts. No Kafka broker is involved.
  */
+@SuppressWarnings("checkstyle:ClassDataAbstractionCoupling")
 class MetricsCollectorThreadingTest {
     private static final SovaConfig CONFIG = SovaConfig.forTesting("localhost:9092");
 
@@ -180,5 +181,33 @@ class MetricsCollectorThreadingTest {
         Thread.interrupted();
 
         assertTrue(scrape(registry).contains("sova_collection_failures_total 0.0"));
+    }
+
+    /**
+     * A branch stuck in the AdminClient must not hold the cycle past its deadline: the cycle is
+     * abandoned, counted as a failure, and {@code collect()} returns.
+     *
+     * @throws IOException if the text writer fails
+     */
+    @Test
+    void stuckBranchFailsTheCycleWithinTheDeadline() throws IOException {
+        // default.api.timeout.ms=100 makes the cycle deadline 5 * 100 = 500 ms.
+        SovaConfig config = new SovaConfig(name -> "STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION".equals(name)
+                ? "bootstrap.servers=localhost:9092\ndefault.api.timeout.ms=100\n" : null);
+        Admin admin = (Admin) Proxy.newProxyInstance(
+                Admin.class.getClassLoader(), new Class<?>[] {Admin.class},
+                (proxy, method, args) -> {
+                    Thread.sleep(60_000);
+                    throw new IllegalStateException("unreachable");
+                });
+        MetricsRegistry registry = new MetricsRegistry();
+
+        long startNs = System.nanoTime();
+        new MetricsCollector(admin, registry, config).collect();
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+
+        assertTrue(elapsedMs < 5_000, "collect() took " + elapsedMs + " ms");
+        String body = scrape(registry);
+        assertTrue(body.contains("sova_collection_failures_total 1.0"), body);
     }
 }

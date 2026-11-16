@@ -4,12 +4,10 @@
  */
 package io.strimzi.sova.kafka;
 
-import java.time.Duration;
 import java.util.Properties;
 
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,11 +24,6 @@ import io.strimzi.sova.config.SovaConfig;
  */
 public class KafkaAdminClient {
     private static final Logger LOGGER = LoggerFactory.getLogger(KafkaAdminClient.class);
-
-    /**
-     * Per-call deadline for every AdminClient request.
-     */
-    private static final Duration API_TIMEOUT = Duration.ofSeconds(30);
 
     /**
      * Private constructor — utility class, not to be instantiated.
@@ -55,20 +48,16 @@ public class KafkaAdminClient {
     /**
      * Assembles the Kafka client properties from the given config.
      *
-     * <p>Default settings are applied first, followed by the configured client properties, so
-     * user-specified settings in {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} can override defaults.
+     * <p>The configured client properties are passed as they are. Sova adds no defaults: in
+     * particular it does not set {@code default.api.timeout.ms}, so when the user leaves it out
+     * Kafka's own default applies, including the automatic raise to {@code request.timeout.ms}.
      *
      * @param config application configuration
      * @return client properties
      */
     static Properties buildProperties(SovaConfig config) {
-        Properties props = new Properties();
-        // Halve the 60 s client default. A cycle makes several sequential calls, so this bounds a
-        // call, not a cycle — the cycle is not bounded here —
-        // but it stops one unresponsive coordinator from stretching every cycle past the interval.
-        props.setProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(API_TIMEOUT.toMillis()));
-        props.putAll(config.getKafkaAdminClientConfiguration());
-
-        return props;
+        // default.api.timeout.ms bounds one call; the cycle is bounded by the deadline in
+        // MetricsCollector, derived from SovaConfig.getAdminApiTimeoutMs().
+        return config.getKafkaAdminClientConfiguration();
     }
 }

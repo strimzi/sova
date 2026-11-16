@@ -21,12 +21,13 @@ Wires together `SovaConfig`, `Admin`, `MetricsRegistry`, `MetricsCollector`, sch
 Registers a shutdown hook that stops the listeners, the scheduler, and the `Admin` client.
 
 **`config/SovaConfig`** — Class holding all configuration options read from environment variables.
-Validates and compiles all regexes, numeric values, and the Kafka client properties at construction time so a malformed or missing environment variable (including a missing `bootstrap.servers`) fails at startup with a message naming the variable.
+Validates and compiles all regexes, numeric values, and the Kafka client properties at construction time so a malformed or missing environment variable (including a missing `bootstrap.servers`) fails at startup with a message naming the variable; an invalid Admin client property fails with Kafka's own `ConfigException`, naming the key.
 The public `SovaConfig(UnaryOperator<String> env)` constructor takes the environment lookup so tests can inject an environment; the no-argument constructor passes `System::getenv`.
 Effectively immutable after creation; safe to read from any thread.
 
 **`kafka/KafkaAdminClient`** — Factory that creates and configures the `Admin` client.
-Applies the default API timeout, then merges the Kafka client properties from `SovaConfig.getKafkaAdminClientConfiguration()` (`bootstrap.servers`, TLS, SASL and any other client setting) over it, so the variable can override the default.
+Passes the Kafka client properties from `SovaConfig.getKafkaAdminClientConfiguration()` (`bootstrap.servers`, TLS, SASL and any other client setting) as they are and adds nothing: without a user `default.api.timeout.ms`, Kafka's own default (60 s) applies.
+`SovaConfig.getAdminApiTimeoutMs()` mirrors the client's effective per-call timeout, read through Kafka's own `AdminClientConfig` (which supplies the defaults and validates, throwing `ConfigException`): the user's `default.api.timeout.ms`, otherwise the larger of its default and `request.timeout.ms`, as `KafkaAdminClient.configureDefaultApiTimeoutMs` does. It is used only to compute the cycle deadline.
 There is no Sova-side security logic: whoever sets the variable decides the mechanism.
 
 **`metrics/MetricsRegistry`** — Holds the most recently collected `MetricSnapshot` in a `volatile` field and registers a single `MultiCollector`, plus the JVM/process instrumentation, with a `PrometheusRegistry` it owns (deliberately not `defaultRegistry` — see invariant 8).
@@ -49,9 +50,10 @@ There is no resource filtering.
 **`metrics/collectors/MetricsCollector`** — Class scheduled periodically on a virtual thread.
 Orchestrates one collection cycle by running `BrokerCollector`, `TopicCollector`, and `ConsumerGroupCollector` concurrently on virtual threads, then computes lag from their results, assembles a `MetricSnapshot` and calls `registry.update(snapshot)`.
 `collect()` never throws — a scheduled task that throws is cancelled silently and never runs again, which would freeze the pod without ever failing liveness.
-Failures are swallowed by level: `InterruptedException` restores the interrupt flag and logs DEBUG (shutdown, not a failure), `Exception` logs WARN, `Throwable` logs ERROR.
+Every wait on a branch is bounded by one deadline for the whole cycle, `SovaConfig.getCollectTimeoutMs()` (5 × `getAdminApiTimeoutMs()`; the reasoning is on `SovaConfig.CYCLE_API_CALLS`); missing it throws `java.util.concurrent.TimeoutException`, the branches are interrupted, and the cycle fails.
+Failures are swallowed by level: `InterruptedException` restores the interrupt flag and logs DEBUG (shutdown, not a failure), the deadline's `TimeoutException` logs WARN, any other `Exception` logs WARN, `Throwable` logs ERROR.
 None of them update the registry's snapshot, so stale metrics continue to be served.
-Every finished cycle calls `registry.recordCycle(elapsed, succeeded)`; the `Exception` and `Throwable` paths count as failures, the `InterruptedException` path records nothing.
+Every finished cycle calls `registry.recordCycle(elapsed, succeeded)`; the `TimeoutException`, `Exception` and `Throwable` paths count as failures, the `InterruptedException` path records nothing.
 Staleness is exposed as the `sova_last_successful_collection_timestamp_seconds` metric, not through a probe.
 
 **`metrics/collectors/BrokerCollector`** — Stateless collector.
@@ -142,6 +144,10 @@ mvn test -Dtest=MetricsRegistryTest
 9. **Readiness is the HTTP server, nothing else.**
    `/ready` is 200 whenever the management listener answers.
    Staleness is a metrics concern: read `sova_last_successful_collection_timestamp_seconds` and `sova_collection_failures_total`.
+10. **Every wait in a cycle is bounded.**
+    `MetricsCollector` never calls `Future.get()` without a timeout: each wait uses the time left until the cycle deadline, `SovaConfig.getCollectTimeoutMs()`.
+    A branch stuck in the AdminClient would otherwise hold the single scheduler thread forever, and since `/healthy` and `/ready` are always 200, nothing would restart the pod.
+    Branches must block only in interruptible waits (today every branch wait is `KafkaFuture.get()`), because after the deadline `close()` waits for the interrupted branches to unwind.
 
 ---
 

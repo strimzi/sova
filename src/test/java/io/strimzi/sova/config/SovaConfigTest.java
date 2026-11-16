@@ -6,6 +6,7 @@ package io.strimzi.sova.config;
 
 import java.util.Map;
 
+import org.apache.kafka.common.config.ConfigException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
@@ -127,5 +128,45 @@ class SovaConfigTest {
         assertEquals(19404, config.getMetricsPort());
         assertEquals(18080, config.getManagementPort());
         assertEquals(5000L, config.getCollectIntervalMs());
+    }
+
+    @Test
+    void adminApiTimeoutDefaultsToKafkaDefault60s() {
+        SovaConfig config = fromEnv(Map.of(CLIENT_CONFIG_ENV, BOOTSTRAP));
+
+        assertEquals(60_000L, config.getAdminApiTimeoutMs());
+        assertEquals(300_000L, config.getCollectTimeoutMs());
+    }
+
+    @Test
+    void collectTimeoutFollowsUserApiTimeout() {
+        SovaConfig config = fromEnv(Map.of(CLIENT_CONFIG_ENV, BOOTSTRAP + "default.api.timeout.ms=10000\n"));
+
+        assertEquals(10_000L, config.getAdminApiTimeoutMs());
+        assertEquals(50_000L, config.getCollectTimeoutMs());
+    }
+
+    @Test
+    void apiTimeoutFollowsRaisedRequestTimeout() {
+        SovaConfig config = fromEnv(Map.of(CLIENT_CONFIG_ENV, BOOTSTRAP + "request.timeout.ms=120000\n"));
+
+        assertEquals(120_000L, config.getAdminApiTimeoutMs());
+        assertEquals(600_000L, config.getCollectTimeoutMs());
+    }
+
+    @Test
+    void explicitApiTimeoutIsUsedAsIs() {
+        SovaConfig config = fromEnv(Map.of(CLIENT_CONFIG_ENV,
+                BOOTSTRAP + "request.timeout.ms=120000\ndefault.api.timeout.ms=150000\n"));
+
+        assertEquals(150_000L, config.getAdminApiTimeoutMs());
+    }
+
+    @Test
+    void invalidAdminTimeoutFailsWithKafkasMessageNamingTheKey() {
+        ConfigException e = assertThrows(ConfigException.class, () -> fromEnv(Map.of(
+                CLIENT_CONFIG_ENV, BOOTSTRAP + "default.api.timeout.ms=abc\n")));
+
+        assertTrue(e.getMessage().contains("default.api.timeout.ms"), "was: " + e.getMessage());
     }
 }

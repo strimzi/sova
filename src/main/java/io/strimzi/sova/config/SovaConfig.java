@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 
 /**
  * Holds all configuration properties for Sova, read from environment variables.
@@ -40,6 +41,30 @@ public final class SovaConfig {
     private static final int DEFAULT_METRICS_PORT = 9404;
     private static final int DEFAULT_MANAGEMENT_PORT = 8080;
     private static final long DEFAULT_COLLECT_INTERVAL_MS = 30000L;
+
+    /**
+     * Number of {@code default.api.timeout.ms} periods one collection cycle may take.
+     *
+     * <p>The Kafka client already bounds each Admin call by {@code default.api.timeout.ms}, so a
+     * dead or unreachable cluster fails the cycle after about one timeout, because the first call
+     * in each branch fails. Detecting a down cluster is not this deadline's job. It is a backstop
+     * for a branch that never returns (an Admin call or code that ignores its timeout). Without
+     * it, a stuck cycle would freeze the fixed-delay schedule while the probes stay 200.
+     *
+     * <p>The timeout multiplied is {@link #getAdminApiTimeoutMs()}, the client's effective
+     * per-call timeout, so the deadline follows the client when {@code request.timeout.ms} is
+     * raised. That value is a Kafka INT, so 5 times it cannot overflow a long.
+     *
+     * <p>Why 5: the longest branch makes 4 sequential Admin calls (groups: {@code listGroups},
+     * the rare {@code describeCluster}, {@code describeConsumerGroups},
+     * {@code listConsumerGroupOffsets}). Topics make 3 ({@code listTopics},
+     * {@code describeTopics}, then both {@code listOffsets} dispatched together), and the broker
+     * branch makes 1. One more call is added as margin. So a cycle that is slow but healthy,
+     * with every call succeeding just under the timeout, is never cut off.
+     *
+     * <p>If a collector gains another sequential Admin call, bump this constant.
+     */
+    private static final long CYCLE_API_CALLS = 5;
 
     /**
      * Compiled regex selecting which consumer groups are reported.
@@ -97,6 +122,11 @@ public final class SovaConfig {
     private final long collectIntervalMs;
 
     /**
+     * Effective per-call timeout of the {@code Admin} client, see {@link #getAdminApiTimeoutMs()}.
+     */
+    private final long adminApiTimeoutMs;
+
+    /**
      * Package-private constructor for tests — allows direct field injection without reading
      * environment variables.
      */
@@ -110,6 +140,7 @@ public final class SovaConfig {
         this.metricsPort = DEFAULT_METRICS_PORT;
         this.managementPort = DEFAULT_MANAGEMENT_PORT;
         this.collectIntervalMs = DEFAULT_COLLECT_INTERVAL_MS;
+        this.adminApiTimeoutMs = effectiveAdminApiTimeoutMs(kafkaAdminClientConfiguration);
     }
 
     /**
@@ -126,6 +157,8 @@ public final class SovaConfig {
      * Reads all configuration from environment variables.
      *
      * @throws IllegalStateException if a required variable is missing or a value is malformed
+     * @throws org.apache.kafka.common.config.ConfigException if an Admin client property in
+     *         {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} is invalid
      */
     public SovaConfig() {
         this(System::getenv);
@@ -137,11 +170,14 @@ public final class SovaConfig {
      *
      * @param env lookup returning the value of a variable, or {@code null} when it is not set
      * @throws IllegalStateException if a required variable is missing or a value is malformed
+     * @throws org.apache.kafka.common.config.ConfigException if an Admin client property in
+     *         {@code STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION} is invalid
      */
     public SovaConfig(UnaryOperator<String> env) {
         kafkaAdminClientConfiguration = parseProperties(ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION,
                 env.apply(ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION));
         requireBootstrapServers(kafkaAdminClientConfiguration);
+        adminApiTimeoutMs = effectiveAdminApiTimeoutMs(kafkaAdminClientConfiguration);
         groupRegex = compilePattern(ENV_GROUP_REGEX, getEnv(env, ENV_GROUP_REGEX, DEFAULT_REGEX));
         groupExcludeRegex = optionalEnv(env, ENV_GROUP_EXCLUDE_REGEX)
                 .map(v -> compilePattern(ENV_GROUP_EXCLUDE_REGEX, v));
@@ -162,6 +198,24 @@ public final class SovaConfig {
             throw new IllegalStateException("Required property " + CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG
                     + " not set in " + ENV_KAFKA_ADMIN_CLIENT_CONFIGURATION);
         }
+    }
+
+    /**
+     * Computes the Admin client's effective per-call timeout with Kafka's own
+     * {@link AdminClientConfig}, which supplies the defaults and validates the values (an invalid
+     * one throws its {@code ConfigException}, naming the key). The rule is the one in
+     * {@code KafkaAdminClient.configureDefaultApiTimeoutMs}: an explicit
+     * {@code default.api.timeout.ms} is used as-is, otherwise the larger of its default and
+     * {@code request.timeout.ms}.
+     *
+     * <p>The public {@code AdminClientConfig(Map)} constructor does not log the values, which may
+     * hold credentials.
+     */
+    private static long effectiveAdminApiTimeoutMs(Properties adminClientConfig) {
+        AdminClientConfig kafka = new AdminClientConfig(adminClientConfig);
+        int request = kafka.getInt(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG);
+        int api = kafka.getInt(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG);
+        return kafka.originals().containsKey(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG) ? api : Math.max(api, request);
     }
 
     private static String getEnv(UnaryOperator<String> env, String name, String defaultValue) {
@@ -318,6 +372,23 @@ public final class SovaConfig {
         return collectIntervalMs;
     }
 
+    /**
+     * @return the {@code Admin} client's effective per-call timeout, read through Kafka's
+     *         {@code AdminClientConfig}: {@code default.api.timeout.ms} when set, otherwise
+     *         {@code max(default.api.timeout.ms default, request.timeout.ms)}
+     */
+    public long getAdminApiTimeoutMs() {
+        return adminApiTimeoutMs;
+    }
+
+    /**
+     * @return deadline for one collection cycle in milliseconds: {@link #CYCLE_API_CALLS} ×
+     *         {@link #getAdminApiTimeoutMs()}, a backstop for a branch that never returns
+     */
+    public long getCollectTimeoutMs() {
+        return CYCLE_API_CALLS * adminApiTimeoutMs;
+    }
+
     @Override
     public String toString() {
         return "SovaConfig{" +
@@ -329,6 +400,8 @@ public final class SovaConfig {
             "\n\tmetricsPort=" + metricsPort +
             "\n\tmanagementPort=" + managementPort +
             "\n\tcollectIntervalMs=" + collectIntervalMs +
+            "\n\tadminApiTimeoutMs=" + getAdminApiTimeoutMs() +
+            "\n\tcollectTimeoutMs=" + getCollectTimeoutMs() +
             '}';
     }
 }

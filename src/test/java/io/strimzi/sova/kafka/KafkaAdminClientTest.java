@@ -39,13 +39,21 @@ class KafkaAdminClientTest {
     }
 
     @Test
-    void minimalClientConfigurationAddsOnlyTheTimeoutDefault() {
+    void minimalClientConfigurationAddsNothing() {
         Properties props = build();
 
         assertEquals("kafka:9092", props.getProperty(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG));
-        assertEquals("30000", props.getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
         assertNull(props.getProperty(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG));
-        assertEquals(2, props.size());
+        assertEquals(1, props.size());
+    }
+
+    /**
+     * Without a user value, Kafka's own default applies, including its automatic raise to
+     * {@code request.timeout.ms}; Sova must not pin it.
+     */
+    @Test
+    void apiTimeoutIsNotSetWithoutAUserValue() {
+        assertNull(build().getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
     }
 
     @Test
@@ -70,14 +78,14 @@ class KafkaAdminClientTest {
     }
 
     @Test
-    void defaultApiTimeoutCanBeOverriddenByClientConfiguration() {
+    void userApiTimeoutIsPassedThroughUnchanged() {
         env.put(CLIENT_CONFIG_ENV, """
                 bootstrap.servers=kafka:9092
-                default.api.timeout.ms=60000
+                default.api.timeout.ms=10000
                 """);
 
         Properties props = build();
 
-        assertEquals("60000", props.getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
+        assertEquals("10000", props.getProperty(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG));
     }
 }

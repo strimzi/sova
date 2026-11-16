@@ -9,12 +9,16 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 
 import io.strimzi.sova.metrics.MetricSnapshot;
 import io.strimzi.sova.metrics.MetricsRegistry;
 import org.apache.kafka.clients.admin.Admin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 import io.strimzi.sova.config.SovaConfig;
 import io.strimzi.sova.metrics.collectors.BrokerCollector.BrokerData;
@@ -31,7 +35,8 @@ import io.strimzi.sova.metrics.collectors.TopicCollector.TopicData;
  * <p>A failed cycle never updates the registry, so the previous snapshot continues to be served to
  * scrapers while the last-success timestamp ages. How the failure is logged depends on
  * what it was: {@link InterruptedException} is shutdown rather than failure and logs DEBUG, an
- * {@link Exception} logs WARN, and a {@link Throwable} logs ERROR.
+ * {@link Exception} logs WARN, and a {@link Throwable} logs ERROR. A cycle that runs past
+ * {@link SovaConfig#getCollectTimeoutMs()} is abandoned and logs WARN.
  *
  * <p>Threading: {@link #collect()} is intended to be called from a virtual-thread-per-task
  * executor so the calling thread is never blocked long-term.
@@ -72,22 +77,36 @@ public class MetricsCollector {
         long startNs = System.nanoTime();
         try {
             collectInternal();
-            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), true);
+            recordCycle(startNs, true);
         } catch (InterruptedException e) {
             // Shutdown interrupts the scheduler thread mid-cycle. Restore the flag so the
             // executor can finish tearing down, and do not count this as a collection failure.
             Thread.currentThread().interrupt();
             LOGGER.debug("Collection cycle interrupted");
+        } catch (TimeoutException e) {
+            // Only the deadline in collectInternal() throws this. A Kafka timeout is a different
+            // class and arrives wrapped in ExecutionException, so it goes to the catch below.
+            LOGGER.warn("Collection cycle exceeded {} ms, stale metrics keep being served",
+                config.getCollectTimeoutMs());
+            recordCycle(startNs, false);
         } catch (Exception e) {
-            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), false);
             LOGGER.warn("Collection cycle failed, stale metrics keep being served", e);
+            recordCycle(startNs, false);
         } catch (Throwable t) {
             // An Error raised on the scheduler thread itself (a branch's Error arrives wrapped in
             // ExecutionException above). Log it and keep the schedule alive: the next cycle may
             // well succeed, and if it does not the last-success timestamp keeps ageing.
-            registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), false);
             LOGGER.error("Collection cycle failed with an error, stale metrics keep being served", t);
+            try {
+                recordCycle(startNs, false);
+            } catch (Throwable ignored) {
+                // Recording must not let a secondary Throwable escape collect() and cancel the schedule.
+            }
         }
+    }
+
+    private void recordCycle(long startNs, boolean succeeded) {
+        registry.recordCycle(Duration.ofNanos(System.nanoTime() - startNs), succeeded);
     }
 
     /**
@@ -95,9 +114,12 @@ public class MetricsCollector {
      *
      * @throws ExecutionException   if an AdminClient future completes exceptionally
      * @throws InterruptedException if the thread is interrupted while waiting for a future
+     * @throws TimeoutException     if the branches are not all done within
+     *                              {@link SovaConfig#getCollectTimeoutMs()}
      */
-    void collectInternal() throws ExecutionException, InterruptedException {
+    void collectInternal() throws ExecutionException, InterruptedException, TimeoutException {
         long startNs = System.nanoTime();
+        long deadlineNs = startNs + MILLISECONDS.toNanos(config.getCollectTimeoutMs());
 
         BrokerData brokerData;
         TopicData topicData;
@@ -119,9 +141,11 @@ public class MetricsCollector {
                 Future<ConsumerGroupData> groups =
                     branches.submit(() -> ConsumerGroupCollector.collect(admin, config));
 
-                brokerData = broker.get();
-                topicData = topics.get();
-                groupData = groups.get();
+                // Every wait is bounded by one deadline for the whole cycle, so a branch stuck in
+                // the AdminClient cannot hold the cycle, and with it the schedule, forever.
+                brokerData = broker.get(deadlineNs - System.nanoTime(), NANOSECONDS);
+                topicData = topics.get(deadlineNs - System.nanoTime(), NANOSECONDS);
+                groupData = groups.get(deadlineNs - System.nanoTime(), NANOSECONDS);
             } finally {
                 // Interrupt before close() starts waiting: once one branch has failed the others
                 // are of no use this cycle, and their AdminClient calls unwind on interrupt, so

@@ -109,6 +109,18 @@ The `process_*` and `jvm_*` families are exported too.
 | `STRIMZI_LOG_LEVEL`                        | `INFO`       | Root log level                                                                                                            |
 | `STRIMZI_AC_LOG_LEVEL`                     | `WARN`       | Log level for the `org.apache.kafka` logger                                                                               |
 
+### Timeouts
+
+Each Admin call is bounded by `default.api.timeout.ms`. Sova does not set it, so the Kafka Admin client default of 60 s applies, raised to `request.timeout.ms` when that is larger.
+To change it, put `default.api.timeout.ms=<ms>` in `STRIMZI_KAFKA_ADMIN_CLIENT_CONFIGURATION`; the value is validated by the Kafka client, and an invalid one fails Sova at startup.
+If you set `default.api.timeout.ms` explicitly, keep it ≥ `request.timeout.ms`, otherwise the Admin client refuses to start.
+
+A whole collection cycle is bounded by a deadline of 5 × that effective per-call timeout (300 s by default).
+The deadline is a backstop for a cycle that never returns, not a way to detect a down cluster.
+It is sized so that a slow but healthy cycle is never cut off: the longest branch makes 4 sequential Admin calls, and one more call is added as margin.
+A cycle that misses the deadline is abandoned, logs a WARN, and counts in `sova_collection_failures_total`; the previous snapshot keeps being served.
+A dead cluster is still counted as a failed cycle after about one API timeout, not the full deadline, because the first call in each branch fails on its own.
+
 ### Health endpoints
 
 `/healthy` is always 200 while the JVM can answer: a broken collection must not restart a pod that is still serving its last good snapshot.
