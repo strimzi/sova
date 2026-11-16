@@ -204,6 +204,42 @@ class MetricsCollectorIT {
     }
 
     @Test
+    void internalTopicsAreReported() throws Exception {
+        String topic = "internal-report-topic";
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+        produce(topic, 0, 3);
+        // A group commit is what creates __consumer_offsets.
+        commit(topic, 0, "internal-report-group", 1);
+
+        collector.collectInternal();
+
+        String scraped = scrape();
+        assertMetricWithLabels(scraped, "kafka_topic_partitions", "topic=\"__consumer_offsets\"} ", null);
+        assertMetricWithLabels(scraped, "kafka_topic_partition_current_offset",
+                "partition=\"0\",topic=\"__consumer_offsets\"} ", null);
+        // Reporting the internal topic must not disturb the ordinary group's lag.
+        assertMetricWithLabels(scraped, "kafka_consumergroup_lag",
+                "consumergroup=\"internal-report-group\",partition=\"0\",topic=\"" + topic + "\"} ", "2.0");
+        assertFalse(scraped.contains("consumergroup=\"internal-report-group\",partition=\"0\",topic=\"__consumer_offsets\""),
+                "a group that never committed to __consumer_offsets must have no series on it");
+    }
+
+    @Test
+    void internalTopicsCanBeExcludedByRegex() throws Exception {
+        String topic = "internal-exclude-topic";
+        admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+        commit(topic, 0, "internal-exclude-group", 0);
+
+        MetricsRegistry filtered = collectWith(Map.of("STRIMZI_TOPIC_EXCLUDE_REGEX", "__.*"));
+
+        String scraped = TestSnapshots.scrape(filtered);
+        assertTrue(scraped.contains("kafka_topic_partitions{topic=\"" + topic + "\"}"),
+                "an ordinary topic must still be reported. Scrape was:\n" + scraped);
+        assertFalse(scraped.contains("topic=\"__consumer_offsets\""),
+                "an excluded internal topic must not be reported. Scrape was:\n" + scraped);
+    }
+
+    @Test
     void groupIncludeAndExcludeRegexAreApplied() throws Exception {
         String topic = "group-filter-topic";
         admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();

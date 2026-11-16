@@ -60,7 +60,7 @@ Staleness is exposed as the `sova_last_successful_collection_timestamp_seconds` 
 Calls `describeCluster()` and returns broker count and address map as a `BrokerData` record.
 
 **`metrics/collectors/TopicCollector`** — Stateless collector.
-Calls `listTopics()` + `describeTopics()` for topic/partition topology, then `listOffsets()` (latest+earliest) for offsets.
+Calls `listTopics()` (with `listInternal(true)`, so `__consumer_offsets` and `__transaction_state` are reported, as in Kafka Exporter; `STRIMZI_TOPIC_EXCLUDE_REGEX=__.*` drops them) + `describeTopics()` for topic/partition topology, then `listOffsets()` (latest+earliest) for offsets.
 Uses per-element futures so a single deleted topic does not abort the whole cycle.
 Returns a `TopicData` record.
 

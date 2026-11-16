@@ -13,6 +13,7 @@ import java.util.concurrent.ExecutionException;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.ListOffsetsResult;
+import org.apache.kafka.clients.admin.ListTopicsOptions;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
@@ -66,7 +67,7 @@ final class TopicCollector {
      */
     static TopicData collect(Admin admin, SovaConfig config)
         throws ExecutionException, InterruptedException, CollectionFailedException {
-        Set<String> allTopics = admin.listTopics()
+        Set<String> allTopics = admin.listTopics(new ListTopicsOptions().listInternal(true))
             .names()
             .get();
         List<String> filtered = new ArrayList<>();

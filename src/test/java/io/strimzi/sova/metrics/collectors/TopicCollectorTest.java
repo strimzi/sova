@@ -4,18 +4,27 @@
  */
 package io.strimzi.sova.metrics.collectors;
 
+import java.lang.reflect.Proxy;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.ListTopicsOptions;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import io.strimzi.sova.config.SovaConfig;
 import io.strimzi.sova.metrics.MetricSnapshot.PartitionMetrics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for how {@link TopicCollector} turns a described partition into its metrics.
@@ -50,5 +59,24 @@ class TopicCollectorTest {
     void partitionMetricsAreDerivedFromTheDescribedPartition(
             String scenario, TopicPartitionInfo info, PartitionMetrics expected) {
         assertEquals(expected, TopicCollector.partitionMetrics(info), scenario);
+    }
+
+    @Test
+    void listsInternalTopics() {
+        AtomicReference<ListTopicsOptions> captured = new AtomicReference<>();
+        Admin admin = (Admin) Proxy.newProxyInstance(
+                Admin.class.getClassLoader(), new Class<?>[] {Admin.class},
+                (proxy, method, args) -> {
+                    if ("listTopics".equals(method.getName()) && args != null && args.length == 1) {
+                        captured.set((ListTopicsOptions) args[0]);
+                    }
+                    throw new IllegalStateException("stop after listTopics");
+                });
+
+        assertThrows(IllegalStateException.class,
+                () -> TopicCollector.collect(admin, SovaConfig.forTesting("localhost:9092")));
+
+        assertNotNull(captured.get(), "listTopics must be called with options");
+        assertTrue(captured.get().shouldListInternal(), "internal topics must be listed");
     }
 }
