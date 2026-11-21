@@ -46,7 +46,8 @@ A value that is not valid properties syntax fails Sova at startup.
 
 Because the properties are passed to the Kafka client unchanged, Kafka config providers (`config.providers=...`) work as usual.
 Use them to read credentials from files, environment variables, or Kubernetes Secrets, for example with the [Strimzi Kubernetes config provider](https://github.com/strimzi/kafka-kubernetes-config-provider).
-The provider's JAR must be on the classpath.
+The Strimzi Kubernetes config provider is included in the Sova distribution.
+Any other provider's JAR must be added to the classpath.
 
 > **Note:** 
 > At startup, Sova logs only the keys of this variable, never the values to keep credentials out of the log.
