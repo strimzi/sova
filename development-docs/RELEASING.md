@@ -107,7 +107,7 @@ After the release pipeline has finished:
    * Use the `CHANGELOG.md` section of the release as the release notes.
    * Mark release candidates as pre-releases.
    * Attach the following files from the `release-sova-<version>.tar` artifact **without changing their file names**:
-     * `sova-<VERSION>-dist.zip`
+     * `sova-<version>-dist.zip` - the distribution from the source build, named after the release version
      * `release-<version>.intoto.jsonl` - the `.intoto.jsonl` name is what the OpenSSF Scorecard `Signed-Releases` check looks for, and the [README](../README.md#artifact-attestations) tells users to verify the release archive with `gh attestation verify <archive> --bundle release-<version>.intoto.jsonl`.
 
 ### Update the Strimzi operators
