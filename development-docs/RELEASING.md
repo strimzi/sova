@@ -28,7 +28,7 @@ RELEASE_VERSION=0.2.0-SNAPSHOT make release_maven
 
 In the same PR, add a header for the next release to `CHANGELOG.md`.
 
-Once this is merged, the next push to `main` publishes `ghcr.io/strimzi/dist-sova:0.2.0-SNAPSHOT`.
+Once this is merged, the build within `main` branch publishes `ghcr.io/strimzi/dist-sova:0.2.0-SNAPSHOT`.
 The previous snapshot tag (`0.1.0-SNAPSHOT`) stays in GHCR but is no longer updated.
 
 When releasing a new patch version, the release branch already exists and you do not need to bump the version in the `main` branch.
@@ -40,9 +40,9 @@ For any release - major, minor or patch - prepare the release branch:
 
 1. Make sure `CHANGELOG.md` in the release branch has an up-to-date section for the version being released.
 2. Check that the `kafka-clients` version in `pom.xml` matches the one used by `strimzi-kafka-operator` (see [DEV_GUIDE.md](DEV_GUIDE.md#kafka-clients-version-alignment)).
-3. Set the Maven project version to the release version:
+3. Prepare the release with `make release`, which sets the Maven project version to the release version:
    ```bash
-   RELEASE_VERSION=0.1.0 make release_maven
+   RELEASE_VERSION=0.1.0 make release
    ```
    Always use the GA version here (e.g. `0.1.0`), not the RC version (e.g. `0.1.0-rc1`).
 4. Review and commit the changes, and push them to the release branch.
