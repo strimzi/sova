@@ -85,12 +85,14 @@ artifact, and a release publishes it again under the release version. The packag
 | Tag                       | Pushed by                | Contains                      |
 |---------------------------|--------------------------|-------------------------------|
 | `0.1.0-SNAPSHOT`          | push to `main`           | `sova-0.1.0-SNAPSHOT-dist.zip` |
-| `0.1.0`, `0.1.0-RC1`, …   | `release.yml`            | `sova-0.1.0-dist.zip`         |
+| `0.1.0-rc1`, …            | `release.yml`            | `sova-0.1.0-rc1-dist.zip`     |
+| `0.1.0`                   | `release.yml`            | `sova-0.1.0-dist.zip`         |
 
 The snapshot tag is mutable and always points at the tip of `main`. The tag and the file name
 inside it always agree, so a consumer can use one version string for both a snapshot and a
-release: `strimzi-kafka-operator` puts `0.1.0-SNAPSHOT` or `0.1.0` in its `sova.version` file and
-the ZIP lands under the name its Makefile looks for.
+release: `strimzi-kafka-operator` puts `0.1.0-SNAPSHOT`, `0.1.0-rc1` or `0.1.0` in its
+`sova.version` file and the ZIP lands under the name its Makefile looks for. An RC and the GA
+released from the same build carry identical bytes, only the file name differs.
 
 The package is public, so pulling needs no credentials — GHCR issues anonymous tokens for public
 packages and ORAS does that handshake itself:

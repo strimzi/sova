@@ -48,29 +48,39 @@ For any release - major, minor or patch - prepare the release branch:
 4. Review and commit the changes, and push them to the release branch.
 
 The build pipeline starts automatically for every commit pushed to the release branch.
+It builds the distribution `sova-<GA version>-dist.zip` from the committed version, and the release pipeline takes it from there.
+That is why the GA version has to be set in the release branch before the build the release is made from, also when releasing an RC.
 
 ### Run the release pipeline
 
 Wait until the [Build workflow](https://github.com/strimzi/sova/actions/workflows/build.yml) has finished successfully for the last commit in the release branch.
+Note its Run ID from the URL (e.g. `https://github.com/strimzi/sova/actions/runs/1234567890` - the Run ID is `1234567890`).
 Then run the [Release workflow](https://github.com/strimzi/sova/actions/workflows/release.yml) manually from the GitHub Actions UI:
 
 * Select the release branch (e.g. `release-0.1.x`) in the `Use workflow from` field.
   The workflow refuses to build from any branch that does not start with `release-`.
 * Set the release version (e.g. `0.1.0` for GA or `0.1.0-rc1` for an RC).
+* Set the GitHub Actions Run ID of the source build to the Run ID noted above.
+  For a GA release, use the Run ID used for the last RC, since there should be no changes after it.
 
-Unlike the operators and Drain Cleaner, Sova's release workflow builds the distribution itself from the selected branch, so it does not take a source build ID or a release suffix.
+The release workflow does not build anything.
+It takes `sova-<GA version>-dist.zip` from the source build and only names it after the release version.
+The workflow fails if the source build does not contain the ZIP for the GA part of the release version, for example when it was built from a snapshot.
 
 The workflow runs the following jobs:
 
-* `prepare-release-artifacts` - runs `make release` and uploads the `release-sova-<version>.tar` workflow artifact containing `sova-<VERSION>-dist.zip`
+* `prepare-release-artifacts` - downloads `binaries-sova.tar` from the source build and uploads the `release-sova-<version>.tar` workflow artifact containing the ZIP renamed to `sova-<version>-dist.zip`
 * `attest` - signs the ZIP with Sigstore (SLSA build provenance) and adds `release-<version>.intoto.jsonl` to the `release-sova-<version>.tar` artifact
-* `publish-dist` - pushes the attested ZIP to `ghcr.io/strimzi/dist-sova:<VERSION>`
+* `publish-dist` - pushes the attested ZIP to `ghcr.io/strimzi/dist-sova:<version>`
 * `snyk-scan` and `fossa-scan` - dependency vulnerability and license scans of the release
 
+For example, for `0.1.0-rc1` the workflow produces `sova-0.1.0-rc1-dist.zip` and `ghcr.io/strimzi/dist-sova:0.1.0-rc1`.
+The content of the ZIP is the GA build: it unpacks into `sova-0.1.0/` and contains `io.strimzi.sova-0.1.0.jar`, and a running RC reports `version="0.1.0"` in `sova_build_info`.
+The RC version is only in the file name and in the tags.
+
 > [!NOTE]
-> `make release` upper-cases the version in the POM.
-> An RC started as `0.1.0-rc1` therefore produces `sova-0.1.0-RC1-dist.zip` and the GHCR tag `0.1.0-RC1`, while the workflow artifact and the attestation bundle keep the lower-case input (`release-sova-0.1.0-rc1.tar`, `release-0.1.0-rc1.intoto.jsonl`).
-> GA versions are unaffected.
+> The Build workflow keeps `binaries-sova.tar` for only 7 days.
+> If the GA release does not happen within 7 days of the source build, re-run the Build workflow for the same commit and release a new RC from it before the GA.
 
 ### Verify the release artifacts
 
@@ -104,7 +114,7 @@ After the release pipeline has finished:
 
 _(only for GA, optionally for RCs that need testing in the operators)_
 
-Update the `sova.version` file in the [strimzi-kafka-operator](https://github.com/strimzi/strimzi-kafka-operator) repository from the snapshot to the released version (e.g. `0.1.0`) and open a PR.
+Update the `sova.version` file in the [strimzi-kafka-operator](https://github.com/strimzi/strimzi-kafka-operator) repository from the snapshot to the released version (e.g. `0.1.0`, or `0.1.0-rc1` to test an RC) and open a PR.
 The operators build pulls the ZIP from `ghcr.io/strimzi/dist-sova:<version>`, so no files need to be copied.
 
 ### Post-release tasks
@@ -122,12 +132,15 @@ Announce only GA releases on the social accounts, if the release is significant 
 
 ## Release candidates
 
-Release candidates are built with the same release workflow as the final releases.
+Release candidates are released with the same release workflow as the final releases.
 When starting the workflow, use the RC name as the release version, for example `0.1.0-rc1` or `0.1.0-rc2`.
 
-When building release candidates, the release branch should already be prepared for the final release.
-E.g. when building `0.1.0-rc1`, the release branch should already have the version `0.1.0` set.
-The RC version (e.g. `0.1.0-rc1`) is used for the GitHub tag and the GitHub release.
+When releasing release candidates, the release branch should already be prepared for the final release.
+E.g. when releasing `0.1.0-rc1`, the release branch should already have the version `0.1.0` set before the source build.
+The RC version (e.g. `0.1.0-rc1`) is used for the GitHub tag and release, the ZIP file name and the GHCR tag, but not inside the ZIP.
+
+When the last RC is accepted, release the GA with the same source build Run ID as that RC.
+The GA ZIP then has the same digest as the RC ZIP, just under the GA name.
 
 ## CVEs
 
