@@ -45,7 +45,7 @@ For any release - major, minor or patch - prepare the release branch:
    RELEASE_VERSION=0.1.0 make release
    ```
    Always use the GA version here (e.g. `0.1.0`), not the RC version (e.g. `0.1.0-rc1`).
-4. Review and commit the changes, and push them to the release branch.
+4. Review and commit the changes (only `pom.xml`), and push them to the release branch.
 
 The build pipeline starts automatically for every commit pushed to the release branch.
 It builds the distribution `sova-<GA version>-dist.zip` from the committed version, and the release pipeline takes it from there.
