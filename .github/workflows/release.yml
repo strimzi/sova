@@ -124,10 +124,14 @@ jobs:
         with:
           name: release-sova-${{ inputs.releaseVersion }}.tar
 
+      # The attest job rebuilds the tar from `find .`, so its members are stored as `./<name>`.
+      # Extract everything rather than naming the member, so this does not depend on that prefix.
       - name: Extract the dist ZIP
         env:
           RELEASE_VERSION: ${{ inputs.releaseVersion }}
-        run: tar -xf "release-sova-${RELEASE_VERSION}.tar" "sova-${RELEASE_VERSION}-dist.zip"
+        run: |
+          tar -xf "release-sova-${RELEASE_VERSION}.tar"
+          test -f "sova-${RELEASE_VERSION}-dist.zip"
 
       # The tag and the file name inside it are both the release version, since that is what the
       # consumer's Makefile looks for.
