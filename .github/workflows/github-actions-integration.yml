@@ -41,7 +41,9 @@ jobs:
       nexusCheck: "none"
       javaVersion: "21"
       helmChartName: "none"
-      releaseVersion: "6.6.6"
+      # Sova does not use the release-artifacts action, its release workflow takes the dist from the
+      # Build workflow run, so skip the release artifacts test
+      releaseVersion: "none"
       helmVersion: "v3.20.0"
       helmUnitTestVersion: "v1.0.3"
       imagesLocation: "none"
